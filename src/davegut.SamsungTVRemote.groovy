@@ -194,11 +194,9 @@ def onPollParse(resp, data) {
 //	===== Capability Switch =====
 def on() {
 	logInfo("on: [frameTv: ${getDataValue("frameTv")}]")
-	if (device.currentValue("wsStatus") == "open") {
-		sendKey("POWER", "Press")
-		pauseExecution(3000)
-		sendKey("POWER", "Release")
-	}
+	//	Power-on is Wake-on-LAN only.  KEY_POWER is a toggle: sending it while the socket
+	//	is open (TV already on) can turn the set OFF -- on a Frame TV the hold powers it
+	//	off outright.  WoL is the safe wake path (matches Home Assistant).
 	def wolMac = getDataValue("alternateWolMac")
 	def cmd = "FFFFFFFFFFFF$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac"
 	wol = new hubitat.device.HubAction(

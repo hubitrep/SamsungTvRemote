@@ -194,11 +194,9 @@ def onPollParse(resp, data) {
 //	===== Capability Switch =====
 def on() {
 	logInfo("on: [frameTv: ${getDataValue("frameTv")}]")
-	if (device.currentValue("wsStatus") == "open") {
-		sendKey("POWER", "Press")
-		pauseExecution(3000)
-		sendKey("POWER", "Release")
-	}
+	//	Power-on is Wake-on-LAN only.  KEY_POWER is a toggle: sending it while the socket
+	//	is open (TV already on) can turn the set OFF -- on a Frame TV the hold powers it
+	//	off outright.  WoL is the safe wake path (matches Home Assistant).
 	def wolMac = getDataValue("alternateWolMac")
 	def cmd = "FFFFFFFFFFFF$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac"
 	wol = new hubitat.device.HubAction(
@@ -582,149 +580,150 @@ def sendKey(key, cmd = "Click") { // library marker davegut.samsungTvWebsocket, 
 	def data = [method:"ms.remote.control", // library marker davegut.samsungTvWebsocket, line 199
 				params:[Cmd:"${cmd}", // library marker davegut.samsungTvWebsocket, line 200
 						DataOfCmd:"${key}", // library marker davegut.samsungTvWebsocket, line 201
-						TypeOfRemote:"SendRemoteKey"]] // library marker davegut.samsungTvWebsocket, line 202
-	sendMessage("remote", JsonOutput.toJson(data).toString() ) // library marker davegut.samsungTvWebsocket, line 203
-} // library marker davegut.samsungTvWebsocket, line 204
- // library marker davegut.samsungTvWebsocket, line 205
-def xxxsendMessage(funct, data) { // library marker davegut.samsungTvWebsocket, line 206
-	def wsStat = device.currentValue("wsStatus") // library marker davegut.samsungTvWebsocket, line 207
-	logDebug("sendMessage: [wsStatus: ${wsStat}, function: ${funct}, data: ${data}, connectType: ${state.currentFunction}") // library marker davegut.samsungTvWebsocket, line 208
-	if (wsStat != "open" || state.currentFunction != funct) { // library marker davegut.samsungTvWebsocket, line 209
-		connect(funct) // library marker davegut.samsungTvWebsocket, line 210
-		pauseExecution(500) // library marker davegut.samsungTvWebsocket, line 211
-	} // library marker davegut.samsungTvWebsocket, line 212
-	interfaces.webSocket.sendMessage(data) // library marker davegut.samsungTvWebsocket, line 213
-	runIn(600, close) // library marker davegut.samsungTvWebsocket, line 214
-} // library marker davegut.samsungTvWebsocket, line 215
- // library marker davegut.samsungTvWebsocket, line 216
-def sendMessage(funct, data) { // library marker davegut.samsungTvWebsocket, line 217
-	def wsStat = device.currentValue("wsStatus") // library marker davegut.samsungTvWebsocket, line 218
-	Map logData = [method: "sendMessage", wsStat: wsStat, funct: funct, data: data] // library marker davegut.samsungTvWebsocket, line 219
-	logDebug("sendMessage: [wsStatus: ${wsStat}, function: ${funct}, data: ${data}, connectType: ${state.currentFunction}") // library marker davegut.samsungTvWebsocket, line 220
-	if (wsStat == "open" && state.currentFunction == funct) { // library marker davegut.samsungTvWebsocket, line 221
-		execMessage(data) // library marker davegut.samsungTvWebsocket, line 222
-		logData << [action: "execMessage"] // library marker davegut.samsungTvWebsocket, line 223
-	} else { // library marker davegut.samsungTvWebsocket, line 224
-		if (wsStat == "open") { close() } // library marker davegut.samsungTvWebsocket, line 225
-		state.wsData = data // library marker davegut.samsungTvWebsocket, line 226
-		def await = connect(funct) // library marker davegut.samsungTvWebsocket, line 227
-		runIn(600, close)	//	close ws after 5 minutes. // library marker davegut.samsungTvWebsocket, line 228
-		logData << [action: "connect"] // library marker davegut.samsungTvWebsocket, line 229
-	} // library marker davegut.samsungTvWebsocket, line 230
-	logDebug(logData) // library marker davegut.samsungTvWebsocket, line 231
-} // library marker davegut.samsungTvWebsocket, line 232
-def execMessage(data) { // library marker davegut.samsungTvWebsocket, line 233
-	interfaces.webSocket.sendMessage(data) // library marker davegut.samsungTvWebsocket, line 234
-} // library marker davegut.samsungTvWebsocket, line 235
- // library marker davegut.samsungTvWebsocket, line 236
-def webSocketOpen() { connect("remote") } // library marker davegut.samsungTvWebsocket, line 237
-def webSocketClose() { close() } // library marker davegut.samsungTvWebsocket, line 238
- // library marker davegut.samsungTvWebsocket, line 239
-def connect(funct) { // library marker davegut.samsungTvWebsocket, line 240
-	logDebug("connect: function = ${funct}") // library marker davegut.samsungTvWebsocket, line 241
-	def url // library marker davegut.samsungTvWebsocket, line 242
-	def name = "SHViaXRhdCBTYW1zdW5nIFJlbW90ZQ==" // library marker davegut.samsungTvWebsocket, line 243
-	if (getDataValue("tokenSupport") == "true") { // library marker davegut.samsungTvWebsocket, line 244
-		if (funct == "remote") { // library marker davegut.samsungTvWebsocket, line 245
-			url = "wss://${deviceIp}:8002/api/v2/channels/samsung.remote.control?name=${name}&token=${state.token}" // library marker davegut.samsungTvWebsocket, line 246
-		} else if (funct == "frameArt") { // library marker davegut.samsungTvWebsocket, line 247
-			url = "wss://${deviceIp}:8002/api/v2/channels/com.samsung.art-app?name=${name}&token=${state.token}" // library marker davegut.samsungTvWebsocket, line 248
-		} else { // library marker davegut.samsungTvWebsocket, line 249
-			logWarn("sendMessage: Invalid Function = ${funct}, tokenSupport = true") // library marker davegut.samsungTvWebsocket, line 250
-		} // library marker davegut.samsungTvWebsocket, line 251
-	} else { // library marker davegut.samsungTvWebsocket, line 252
-		if (funct == "remote") { // library marker davegut.samsungTvWebsocket, line 253
-			url = "ws://${deviceIp}:8001/api/v2/channels/samsung.remote.control?name=${name}" // library marker davegut.samsungTvWebsocket, line 254
-		} else if (funct == "frameArt") { // library marker davegut.samsungTvWebsocket, line 255
-			url = "ws://${deviceIp}:8001/api/v2/channels/com.samsung.art-app?name=${name}" // library marker davegut.samsungTvWebsocket, line 256
-		} else { // library marker davegut.samsungTvWebsocket, line 257
-			logWarn("sendMessage: Invalid Function = ${funct}, tokenSupport = false") // library marker davegut.samsungTvWebsocket, line 258
-		} // library marker davegut.samsungTvWebsocket, line 259
-	} // library marker davegut.samsungTvWebsocket, line 260
-	state.currentFunction = funct // library marker davegut.samsungTvWebsocket, line 261
-	interfaces.webSocket.connect(url, ignoreSSLIssues: true) // library marker davegut.samsungTvWebsocket, line 262
-	return // library marker davegut.samsungTvWebsocket, line 263
-} // library marker davegut.samsungTvWebsocket, line 264
- // library marker davegut.samsungTvWebsocket, line 265
-def close() { // library marker davegut.samsungTvWebsocket, line 266
-	logDebug("close") // library marker davegut.samsungTvWebsocket, line 267
-	interfaces.webSocket.close() // library marker davegut.samsungTvWebsocket, line 268
-	sendEvent(name: "wsStatus", value: "closed") // library marker davegut.samsungTvWebsocket, line 269
-} // library marker davegut.samsungTvWebsocket, line 270
- // library marker davegut.samsungTvWebsocket, line 271
-def webSocketStatus(message) { // library marker davegut.samsungTvWebsocket, line 272
-	def status // library marker davegut.samsungTvWebsocket, line 273
-	Map logData = [method: "webSocketStatus"] // library marker davegut.samsungTvWebsocket, line 274
-	if (message == "status: open") { // library marker davegut.samsungTvWebsocket, line 275
-		status = "open" // library marker davegut.samsungTvWebsocket, line 276
-		if (state.wsData != "") { // library marker davegut.samsungTvWebsocket, line 277
-			execMessage(state.wsData) // library marker davegut.samsungTvWebsocket, line 278
-			state.wsData = "" // library marker davegut.samsungTvWebsocket, line 279
-			logData << [action: "execMessage"] // library marker davegut.samsungTvWebsocket, line 280
-		} // library marker davegut.samsungTvWebsocket, line 281
-		if (state.pendingPowerHold) { // library marker davegut.samsungTvWebsocket, line 282
-			state.pendingPowerHold = false // library marker davegut.samsungTvWebsocket, line 283
-			logData << [action: "powerHold"] // library marker davegut.samsungTvWebsocket, line 284
-			powerHold() // library marker davegut.samsungTvWebsocket, line 285
-		} // library marker davegut.samsungTvWebsocket, line 286
-	} else if (message == "status: closing") { // library marker davegut.samsungTvWebsocket, line 287
-		status = "closed" // library marker davegut.samsungTvWebsocket, line 288
-		state.currentFunction = "close" // library marker davegut.samsungTvWebsocket, line 289
-	} else if (message.substring(0,7) == "failure") { // library marker davegut.samsungTvWebsocket, line 290
-		status = "closed-failure" // library marker davegut.samsungTvWebsocket, line 291
-		state.currentFunction = "close" // library marker davegut.samsungTvWebsocket, line 292
-		state.pendingPowerHold = false // library marker davegut.samsungTvWebsocket, line 293
-		close() // library marker davegut.samsungTvWebsocket, line 294
-	} // library marker davegut.samsungTvWebsocket, line 295
-	sendEvent(name: "wsStatus", value: status) // library marker davegut.samsungTvWebsocket, line 296
-	logData << [wsStatus: status] // library marker davegut.samsungTvWebsocket, line 297
-	logDebug(logData) // library marker davegut.samsungTvWebsocket, line 298
-} // library marker davegut.samsungTvWebsocket, line 299
- // library marker davegut.samsungTvWebsocket, line 300
-def parse(resp) { // library marker davegut.samsungTvWebsocket, line 301
-	def logData = [method: "parse"] // library marker davegut.samsungTvWebsocket, line 302
-	try { // library marker davegut.samsungTvWebsocket, line 303
-		resp = parseJson(resp) // library marker davegut.samsungTvWebsocket, line 304
-		def event = resp.event // library marker davegut.samsungTvWebsocket, line 305
-		logData << [EVENT: event] // library marker davegut.samsungTvWebsocket, line 306
-		switch(event) { // library marker davegut.samsungTvWebsocket, line 307
-			case "ms.channel.connect": // library marker davegut.samsungTvWebsocket, line 308
-				def newToken = resp.data.token // library marker davegut.samsungTvWebsocket, line 309
-				if (newToken != null && newToken != state.token) { // library marker davegut.samsungTvWebsocket, line 310
-					state.token = newToken // library marker davegut.samsungTvWebsocket, line 311
-					logData << [TOKEN: "updated"] // library marker davegut.samsungTvWebsocket, line 312
-				} else { // library marker davegut.samsungTvWebsocket, line 313
-					logData << [TOKEN: "noChange"] // library marker davegut.samsungTvWebsocket, line 314
-				} // library marker davegut.samsungTvWebsocket, line 315
-				break // library marker davegut.samsungTvWebsocket, line 316
-			case "d2d_service_message": // library marker davegut.samsungTvWebsocket, line 317
-				def data = parseJson(resp.data) // library marker davegut.samsungTvWebsocket, line 318
-				if (data.event == "artmode_status" || // library marker davegut.samsungTvWebsocket, line 319
-					data.event == "art_mode_changed") { // library marker davegut.samsungTvWebsocket, line 320
-					def status = data.value // library marker davegut.samsungTvWebsocket, line 321
-					if (status == null) { status = data.status } // library marker davegut.samsungTvWebsocket, line 322
-					sendEvent(name: "artModeStatus", value: status) // library marker davegut.samsungTvWebsocket, line 323
-					logData << [artModeStatus: status] // library marker davegut.samsungTvWebsocket, line 324
-					state.artModeWs = true // library marker davegut.samsungTvWebsocket, line 325
-				} // library marker davegut.samsungTvWebsocket, line 326
-				break // library marker davegut.samsungTvWebsocket, line 327
-			case "ms.error": // library marker davegut.samsungTvWebsocket, line 328
-			case "ms.channel.ready": // library marker davegut.samsungTvWebsocket, line 329
-			case "ms.channel.clientConnect": // library marker davegut.samsungTvWebsocket, line 330
-			case "ms.channel.clientDisconnect": // library marker davegut.samsungTvWebsocket, line 331
-			case "ms.remote.touchEnable": // library marker davegut.samsungTvWebsocket, line 332
-			case "ms.remote.touchDisable": // library marker davegut.samsungTvWebsocket, line 333
-				break // library marker davegut.samsungTvWebsocket, line 334
-			default: // library marker davegut.samsungTvWebsocket, line 335
-				logData << [STATUS: "Not Parsed", DATA: resp.data] // library marker davegut.samsungTvWebsocket, line 336
-				break // library marker davegut.samsungTvWebsocket, line 337
-		} // library marker davegut.samsungTvWebsocket, line 338
-		logDebug(logData) // library marker davegut.samsungTvWebsocket, line 339
-	} catch (e) { // library marker davegut.samsungTvWebsocket, line 340
-		logData << [STATUS: "unhandled", ERROR: e] // library marker davegut.samsungTvWebsocket, line 341
-		logWarn(logData) // library marker davegut.samsungTvWebsocket, line 342
-	} // library marker davegut.samsungTvWebsocket, line 343
-} // library marker davegut.samsungTvWebsocket, line 344
+						Option:"false", // library marker davegut.samsungTvWebsocket, line 202
+						TypeOfRemote:"SendRemoteKey"]] // library marker davegut.samsungTvWebsocket, line 203
+	sendMessage("remote", JsonOutput.toJson(data).toString() ) // library marker davegut.samsungTvWebsocket, line 204
+} // library marker davegut.samsungTvWebsocket, line 205
+ // library marker davegut.samsungTvWebsocket, line 206
+def xxxsendMessage(funct, data) { // library marker davegut.samsungTvWebsocket, line 207
+	def wsStat = device.currentValue("wsStatus") // library marker davegut.samsungTvWebsocket, line 208
+	logDebug("sendMessage: [wsStatus: ${wsStat}, function: ${funct}, data: ${data}, connectType: ${state.currentFunction}") // library marker davegut.samsungTvWebsocket, line 209
+	if (wsStat != "open" || state.currentFunction != funct) { // library marker davegut.samsungTvWebsocket, line 210
+		connect(funct) // library marker davegut.samsungTvWebsocket, line 211
+		pauseExecution(500) // library marker davegut.samsungTvWebsocket, line 212
+	} // library marker davegut.samsungTvWebsocket, line 213
+	interfaces.webSocket.sendMessage(data) // library marker davegut.samsungTvWebsocket, line 214
+	runIn(600, close) // library marker davegut.samsungTvWebsocket, line 215
+} // library marker davegut.samsungTvWebsocket, line 216
+ // library marker davegut.samsungTvWebsocket, line 217
+def sendMessage(funct, data) { // library marker davegut.samsungTvWebsocket, line 218
+	def wsStat = device.currentValue("wsStatus") // library marker davegut.samsungTvWebsocket, line 219
+	Map logData = [method: "sendMessage", wsStat: wsStat, funct: funct, data: data] // library marker davegut.samsungTvWebsocket, line 220
+	logDebug("sendMessage: [wsStatus: ${wsStat}, function: ${funct}, data: ${data}, connectType: ${state.currentFunction}") // library marker davegut.samsungTvWebsocket, line 221
+	if (wsStat == "open" && state.currentFunction == funct) { // library marker davegut.samsungTvWebsocket, line 222
+		execMessage(data) // library marker davegut.samsungTvWebsocket, line 223
+		logData << [action: "execMessage"] // library marker davegut.samsungTvWebsocket, line 224
+	} else { // library marker davegut.samsungTvWebsocket, line 225
+		if (wsStat == "open") { close() } // library marker davegut.samsungTvWebsocket, line 226
+		state.wsData = data // library marker davegut.samsungTvWebsocket, line 227
+		def await = connect(funct) // library marker davegut.samsungTvWebsocket, line 228
+		runIn(600, close)	//	close ws after 5 minutes. // library marker davegut.samsungTvWebsocket, line 229
+		logData << [action: "connect"] // library marker davegut.samsungTvWebsocket, line 230
+	} // library marker davegut.samsungTvWebsocket, line 231
+	logDebug(logData) // library marker davegut.samsungTvWebsocket, line 232
+} // library marker davegut.samsungTvWebsocket, line 233
+def execMessage(data) { // library marker davegut.samsungTvWebsocket, line 234
+	interfaces.webSocket.sendMessage(data) // library marker davegut.samsungTvWebsocket, line 235
+} // library marker davegut.samsungTvWebsocket, line 236
+ // library marker davegut.samsungTvWebsocket, line 237
+def webSocketOpen() { connect("remote") } // library marker davegut.samsungTvWebsocket, line 238
+def webSocketClose() { close() } // library marker davegut.samsungTvWebsocket, line 239
+ // library marker davegut.samsungTvWebsocket, line 240
+def connect(funct) { // library marker davegut.samsungTvWebsocket, line 241
+	logDebug("connect: function = ${funct}") // library marker davegut.samsungTvWebsocket, line 242
+	def url // library marker davegut.samsungTvWebsocket, line 243
+	def name = "SHViaXRhdCBTYW1zdW5nIFJlbW90ZQ==" // library marker davegut.samsungTvWebsocket, line 244
+	if (getDataValue("tokenSupport") == "true") { // library marker davegut.samsungTvWebsocket, line 245
+		if (funct == "remote") { // library marker davegut.samsungTvWebsocket, line 246
+			url = "wss://${deviceIp}:8002/api/v2/channels/samsung.remote.control?name=${name}&token=${state.token}" // library marker davegut.samsungTvWebsocket, line 247
+		} else if (funct == "frameArt") { // library marker davegut.samsungTvWebsocket, line 248
+			url = "wss://${deviceIp}:8002/api/v2/channels/com.samsung.art-app?name=${name}&token=${state.token}" // library marker davegut.samsungTvWebsocket, line 249
+		} else { // library marker davegut.samsungTvWebsocket, line 250
+			logWarn("sendMessage: Invalid Function = ${funct}, tokenSupport = true") // library marker davegut.samsungTvWebsocket, line 251
+		} // library marker davegut.samsungTvWebsocket, line 252
+	} else { // library marker davegut.samsungTvWebsocket, line 253
+		if (funct == "remote") { // library marker davegut.samsungTvWebsocket, line 254
+			url = "ws://${deviceIp}:8001/api/v2/channels/samsung.remote.control?name=${name}" // library marker davegut.samsungTvWebsocket, line 255
+		} else if (funct == "frameArt") { // library marker davegut.samsungTvWebsocket, line 256
+			url = "ws://${deviceIp}:8001/api/v2/channels/com.samsung.art-app?name=${name}" // library marker davegut.samsungTvWebsocket, line 257
+		} else { // library marker davegut.samsungTvWebsocket, line 258
+			logWarn("sendMessage: Invalid Function = ${funct}, tokenSupport = false") // library marker davegut.samsungTvWebsocket, line 259
+		} // library marker davegut.samsungTvWebsocket, line 260
+	} // library marker davegut.samsungTvWebsocket, line 261
+	state.currentFunction = funct // library marker davegut.samsungTvWebsocket, line 262
+	interfaces.webSocket.connect(url, ignoreSSLIssues: true) // library marker davegut.samsungTvWebsocket, line 263
+	return // library marker davegut.samsungTvWebsocket, line 264
+} // library marker davegut.samsungTvWebsocket, line 265
+ // library marker davegut.samsungTvWebsocket, line 266
+def close() { // library marker davegut.samsungTvWebsocket, line 267
+	logDebug("close") // library marker davegut.samsungTvWebsocket, line 268
+	interfaces.webSocket.close() // library marker davegut.samsungTvWebsocket, line 269
+	sendEvent(name: "wsStatus", value: "closed") // library marker davegut.samsungTvWebsocket, line 270
+} // library marker davegut.samsungTvWebsocket, line 271
+ // library marker davegut.samsungTvWebsocket, line 272
+def webSocketStatus(message) { // library marker davegut.samsungTvWebsocket, line 273
+	def status // library marker davegut.samsungTvWebsocket, line 274
+	Map logData = [method: "webSocketStatus"] // library marker davegut.samsungTvWebsocket, line 275
+	if (message == "status: open") { // library marker davegut.samsungTvWebsocket, line 276
+		status = "open" // library marker davegut.samsungTvWebsocket, line 277
+		if (state.wsData != "") { // library marker davegut.samsungTvWebsocket, line 278
+			execMessage(state.wsData) // library marker davegut.samsungTvWebsocket, line 279
+			state.wsData = "" // library marker davegut.samsungTvWebsocket, line 280
+			logData << [action: "execMessage"] // library marker davegut.samsungTvWebsocket, line 281
+		} // library marker davegut.samsungTvWebsocket, line 282
+		if (state.pendingPowerHold) { // library marker davegut.samsungTvWebsocket, line 283
+			state.pendingPowerHold = false // library marker davegut.samsungTvWebsocket, line 284
+			logData << [action: "powerHold"] // library marker davegut.samsungTvWebsocket, line 285
+			powerHold() // library marker davegut.samsungTvWebsocket, line 286
+		} // library marker davegut.samsungTvWebsocket, line 287
+	} else if (message == "status: closing") { // library marker davegut.samsungTvWebsocket, line 288
+		status = "closed" // library marker davegut.samsungTvWebsocket, line 289
+		state.currentFunction = "close" // library marker davegut.samsungTvWebsocket, line 290
+	} else if (message.substring(0,7) == "failure") { // library marker davegut.samsungTvWebsocket, line 291
+		status = "closed-failure" // library marker davegut.samsungTvWebsocket, line 292
+		state.currentFunction = "close" // library marker davegut.samsungTvWebsocket, line 293
+		state.pendingPowerHold = false // library marker davegut.samsungTvWebsocket, line 294
+		close() // library marker davegut.samsungTvWebsocket, line 295
+	} // library marker davegut.samsungTvWebsocket, line 296
+	sendEvent(name: "wsStatus", value: status) // library marker davegut.samsungTvWebsocket, line 297
+	logData << [wsStatus: status] // library marker davegut.samsungTvWebsocket, line 298
+	logDebug(logData) // library marker davegut.samsungTvWebsocket, line 299
+} // library marker davegut.samsungTvWebsocket, line 300
+ // library marker davegut.samsungTvWebsocket, line 301
+def parse(resp) { // library marker davegut.samsungTvWebsocket, line 302
+	def logData = [method: "parse"] // library marker davegut.samsungTvWebsocket, line 303
+	try { // library marker davegut.samsungTvWebsocket, line 304
+		resp = parseJson(resp) // library marker davegut.samsungTvWebsocket, line 305
+		def event = resp.event // library marker davegut.samsungTvWebsocket, line 306
+		logData << [EVENT: event] // library marker davegut.samsungTvWebsocket, line 307
+		switch(event) { // library marker davegut.samsungTvWebsocket, line 308
+			case "ms.channel.connect": // library marker davegut.samsungTvWebsocket, line 309
+				def newToken = resp.data.token // library marker davegut.samsungTvWebsocket, line 310
+				if (newToken != null && newToken != state.token) { // library marker davegut.samsungTvWebsocket, line 311
+					state.token = newToken // library marker davegut.samsungTvWebsocket, line 312
+					logData << [TOKEN: "updated"] // library marker davegut.samsungTvWebsocket, line 313
+				} else { // library marker davegut.samsungTvWebsocket, line 314
+					logData << [TOKEN: "noChange"] // library marker davegut.samsungTvWebsocket, line 315
+				} // library marker davegut.samsungTvWebsocket, line 316
+				break // library marker davegut.samsungTvWebsocket, line 317
+			case "d2d_service_message": // library marker davegut.samsungTvWebsocket, line 318
+				def data = parseJson(resp.data) // library marker davegut.samsungTvWebsocket, line 319
+				if (data.event == "artmode_status" || // library marker davegut.samsungTvWebsocket, line 320
+					data.event == "art_mode_changed") { // library marker davegut.samsungTvWebsocket, line 321
+					def status = data.value // library marker davegut.samsungTvWebsocket, line 322
+					if (status == null) { status = data.status } // library marker davegut.samsungTvWebsocket, line 323
+					sendEvent(name: "artModeStatus", value: status) // library marker davegut.samsungTvWebsocket, line 324
+					logData << [artModeStatus: status] // library marker davegut.samsungTvWebsocket, line 325
+					state.artModeWs = true // library marker davegut.samsungTvWebsocket, line 326
+				} // library marker davegut.samsungTvWebsocket, line 327
+				break // library marker davegut.samsungTvWebsocket, line 328
+			case "ms.error": // library marker davegut.samsungTvWebsocket, line 329
+			case "ms.channel.ready": // library marker davegut.samsungTvWebsocket, line 330
+			case "ms.channel.clientConnect": // library marker davegut.samsungTvWebsocket, line 331
+			case "ms.channel.clientDisconnect": // library marker davegut.samsungTvWebsocket, line 332
+			case "ms.remote.touchEnable": // library marker davegut.samsungTvWebsocket, line 333
+			case "ms.remote.touchDisable": // library marker davegut.samsungTvWebsocket, line 334
+				break // library marker davegut.samsungTvWebsocket, line 335
+			default: // library marker davegut.samsungTvWebsocket, line 336
+				logData << [STATUS: "Not Parsed", DATA: resp.data] // library marker davegut.samsungTvWebsocket, line 337
+				break // library marker davegut.samsungTvWebsocket, line 338
+		} // library marker davegut.samsungTvWebsocket, line 339
+		logDebug(logData) // library marker davegut.samsungTvWebsocket, line 340
+	} catch (e) { // library marker davegut.samsungTvWebsocket, line 341
+		logData << [STATUS: "unhandled", ERROR: e] // library marker davegut.samsungTvWebsocket, line 342
+		logWarn(logData) // library marker davegut.samsungTvWebsocket, line 343
+	} // library marker davegut.samsungTvWebsocket, line 344
+} // library marker davegut.samsungTvWebsocket, line 345
 // ~~~~~ end include (1) davegut.samsungTvWebsocket ~~~~~
 // ~~~~~ start include (2) davegut.samsungTvApps ~~~~~
 library ( // library marker davegut.samsungTvApps, line 1
@@ -1562,7 +1561,7 @@ library ( // library marker davegut.Logging, line 1
  // library marker davegut.Logging, line 9
 def nameSpace() { return "davegut" } // library marker davegut.Logging, line 10
  // library marker davegut.Logging, line 11
-def version() { return "2.3.9d" } // library marker davegut.Logging, line 12
+def version() { return "2.3.9e" } // library marker davegut.Logging, line 12
  // library marker davegut.Logging, line 13
 def label() { // library marker davegut.Logging, line 14
 	if (device) {  // library marker davegut.Logging, line 15

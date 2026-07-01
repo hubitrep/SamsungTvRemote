@@ -199,6 +199,7 @@ def sendKey(key, cmd = "Click") {
 	def data = [method:"ms.remote.control",
 				params:[Cmd:"${cmd}",
 						DataOfCmd:"${key}",
+						Option:"false",
 						TypeOfRemote:"SendRemoteKey"]]
 	sendMessage("remote", JsonOutput.toJson(data).toString() )
 }
