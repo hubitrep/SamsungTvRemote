@@ -161,13 +161,15 @@ def onPoll() {
 	]
 	asynchttpGet("onPollParse", sendCmdParams)
 	if (getDataValue("driverVersion") != driverVer()) {
-		logInfo("Auto Configuring changes to this TV.")
 		updateDriver()
-		pauseExecution(3000)
 	}
 }
 
 def updateDriver() {
+	logInfo("driver updated to ${driverVer()}")
+	//	version-specific state migrations go here (old version still in getDataValue("driverVersion"))
+	updateDataValue("driverVersion", driverVer())
+	runIn(1, updated)
 }
 
 def onPollParse(resp, data) {

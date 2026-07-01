@@ -161,13 +161,15 @@ def onPoll() {
 	]
 	asynchttpGet("onPollParse", sendCmdParams)
 	if (getDataValue("driverVersion") != driverVer()) {
-		logInfo("Auto Configuring changes to this TV.")
 		updateDriver()
-		pauseExecution(3000)
 	}
 }
 
 def updateDriver() {
+	logInfo("driver updated to ${driverVer()}")
+	//	version-specific state migrations go here (old version still in getDataValue("driverVersion"))
+	updateDataValue("driverVersion", driverVer())
+	runIn(1, updated)
 }
 
 def onPollParse(resp, data) {
@@ -1578,7 +1580,7 @@ library ( // library marker davegut.Logging, line 1
  // library marker davegut.Logging, line 9
 def nameSpace() { return "davegut" } // library marker davegut.Logging, line 10
  // library marker davegut.Logging, line 11
-def version() { return "2.3.9h" } // library marker davegut.Logging, line 12
+def version() { return "2.3.9i" } // library marker davegut.Logging, line 12
  // library marker davegut.Logging, line 13
 def label() { // library marker davegut.Logging, line 14
 	if (device) {  // library marker davegut.Logging, line 15
