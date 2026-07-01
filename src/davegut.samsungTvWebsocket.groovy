@@ -226,9 +226,12 @@ def sendMessage(funct, data) {
 		if (wsStat == "open") { close() }
 		state.wsData = data
 		def await = connect(funct)
-		//	No idle-close: the platform's 30s ping keeps the socket healthy while the TV
-		//	is on, and a ping failure (TV slept) closes it via webSocketStatus.  Socket
-		//	lifetime now tracks power, giving onPollParse a liveness oracle.
+		//	Optional idle-close (default "never").  While open, the platform's 30s ping
+		//	keeps the socket healthy and its failure is the power oracle, so holding it
+		//	open is preferred; set a timeout only if a held socket disturbs TV standby.
+		if (settings.wsIdleClose && settings.wsIdleClose != "never") {
+			runIn(settings.wsIdleClose.toInteger() * 60, close)
+		}
 		logData << [action: "connect"]
 	}
 	logDebug(logData)

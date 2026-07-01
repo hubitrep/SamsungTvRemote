@@ -47,6 +47,8 @@ metadata {
 		}
 		input ("pollInterval","enum", title: "Power Polling Interval (seconds)",
 			   options: ["off", "10", "20", "30", "60"], defaultValue: "60")
+		input ("wsIdleClose", "enum", title: "Close idle websocket after (minutes)",
+			   options: ["never", "10", "30", "60"], defaultValue: "never")
 		tvAppsPreferences()
 	}
 }
