@@ -177,7 +177,20 @@ def onPollParse(resp, data) {
 	}
 	def onOff = "off"
 	if (powerState == "on") { onOff = "on" }
-	Map logData = [method: "onPollParse", httpStatus: resp.status, 
+	//	Socket-liveness cross-check: the platform pings the open remote socket every 30s,
+	//	so a websocket failure in the last cycle means the set stopped answering -- treat
+	//	as "off" even when REST PowerState still reports "on" (standby-lie on some sets).
+	if (onOff == "on" && state.lastWsFailure &&
+		now() - state.lastWsFailure < 35000) {
+		onOff = "off"
+		powerState = "${powerState}/wsFailed"
+	}
+	//	Power-off cooldown: hold "off" briefly after an off() so a mid-shutdown read
+	//	can't bounce the switch back on.
+	if (state.powerOffAt && now() - state.powerOffAt < 6000) {
+		onOff = "off"
+	}
+	Map logData = [method: "onPollParse", httpStatus: resp.status,
 				   powerState: powerState, onOff: onOff]
 	if (device.currentValue("switch") != onOff) {
 		sendEvent(name: "switch", value: onOff)
@@ -199,13 +212,16 @@ def on() {
 	//	off outright.  WoL is the safe wake path (matches Home Assistant).
 	def wolMac = getDataValue("alternateWolMac")
 	def cmd = "FFFFFFFFFFFF$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac"
-	wol = new hubitat.device.HubAction(
-		cmd,
-		hubitat.device.Protocol.LAN,
-		[type: hubitat.device.HubAction.Type.LAN_TYPE_UDPCLIENT,
-		 destinationAddress: "255.255.255.255:7",
-		 encoding: hubitat.device.HubAction.Encoding.HEX_STRING])
-	sendHubCommand(wol)
+	//	Broadcast the magic packet to both WoL ports (9 = discard, 7 = echo) -- two
+	//	packets, since a single packet to one port is occasionally missed by the TV
+	//	NIC in deep standby.
+	["255.255.255.255:9", "255.255.255.255:7"].each { dest ->
+		sendHubCommand(new hubitat.device.HubAction(cmd,
+			hubitat.device.Protocol.LAN,
+			[type: hubitat.device.HubAction.Type.LAN_TYPE_UDPCLIENT,
+			 destinationAddress: dest,
+			 encoding: hubitat.device.HubAction.Encoding.HEX_STRING]))
+	}
 	runIn(1, onPoll)
 }
 
@@ -223,6 +239,9 @@ def setPowerOnMode() {
 
 def off() {
 	logInfo("off: [frameTv: ${getDataValue("frameTv")}]")
+	//	Cooldown stamp: onPollParse holds "off" for a few seconds so a transitional poll
+	//	(TV still answering mid-shutdown) can't bounce the switch back on.
+	state.powerOffAt = now()
 	if (getDataValue("frameTv") == "true") {
 		//	Frame TVs enter art mode on a short press; a sustained hold is required to
 		//	power off.  Gate the hold on an open socket so the reconnect race cannot drop

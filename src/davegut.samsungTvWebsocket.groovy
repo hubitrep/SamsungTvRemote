@@ -226,7 +226,9 @@ def sendMessage(funct, data) {
 		if (wsStat == "open") { close() }
 		state.wsData = data
 		def await = connect(funct)
-		runIn(600, close)	//	close ws after 5 minutes.
+		//	No idle-close: the platform's 30s ping keeps the socket healthy while the TV
+		//	is on, and a ping failure (TV slept) closes it via webSocketStatus.  Socket
+		//	lifetime now tracks power, giving onPollParse a liveness oracle.
 		logData << [action: "connect"]
 	}
 	logDebug(logData)
@@ -290,6 +292,11 @@ def webSocketStatus(message) {
 		state.currentFunction = "close"
 	} else if (message.substring(0,7) == "failure") {
 		status = "closed-failure"
+		//	Only a remote-socket failure reflects TV power; a frameArt failure (e.g.
+		//	art-app channel absent on a non-Frame set) must not poison the oracle.
+		if (state.currentFunction == "remote") {
+			state.lastWsFailure = now()
+		}
 		state.currentFunction = "close"
 		state.pendingPowerHold = false
 		close()
