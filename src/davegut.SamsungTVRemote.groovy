@@ -225,10 +225,30 @@ def setPowerOnMode() {
 
 def off() {
 	logInfo("off: [frameTv: ${getDataValue("frameTv")}]")
+	if (getDataValue("frameTv") == "true") {
+		//	Frame TVs enter art mode on a short press; a sustained hold is required to
+		//	power off.  Gate the hold on an open socket so the reconnect race cannot drop
+		//	the Press.  NOTE: connection-gated hold is unverified on Frame hardware.
+		if (device.currentValue("wsStatus") == "open") {
+			powerHold()
+		} else {
+			state.pendingPowerHold = true
+			connect("remote")
+		}
+	} else {
+		sendKey("POWER")
+		runIn(1, onPoll)
+	}
+}
+
+def powerHold() {
 	sendKey("POWER", "Press")
-	pauseExecution(3000)
+	runInMillis(3000, powerHoldRelease)
+}
+
+def powerHoldRelease() {
 	sendKey("POWER", "Release")
-	runIn(1, onPoll)
+	runIn(2, onPoll)
 }
 
 def setPowerOffMode() {

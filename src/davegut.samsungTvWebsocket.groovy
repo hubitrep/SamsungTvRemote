@@ -271,7 +271,7 @@ def close() {
 
 def webSocketStatus(message) {
 	def status
-	Map logData = [metnod: "webSocketStatus"]
+	Map logData = [method: "webSocketStatus"]
 	if (message == "status: open") {
 		status = "open"
 		if (state.wsData != "") {
@@ -279,12 +279,18 @@ def webSocketStatus(message) {
 			state.wsData = ""
 			logData << [action: "execMessage"]
 		}
+		if (state.pendingPowerHold) {
+			state.pendingPowerHold = false
+			logData << [action: "powerHold"]
+			powerHold()
+		}
 	} else if (message == "status: closing") {
 		status = "closed"
 		state.currentFunction = "close"
 	} else if (message.substring(0,7) == "failure") {
 		status = "closed-failure"
 		state.currentFunction = "close"
+		state.pendingPowerHold = false
 		close()
 	}
 	sendEvent(name: "wsStatus", value: status)
