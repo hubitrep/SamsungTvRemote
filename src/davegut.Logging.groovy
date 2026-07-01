@@ -9,7 +9,7 @@ library (
 
 def nameSpace() { return "davegut" }
 
-def version() { return "2.3.9g" }
+def version() { return "2.3.9h" }
 
 def label() {
 	if (device) { 

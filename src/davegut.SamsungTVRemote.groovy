@@ -179,16 +179,13 @@ def onPollParse(resp, data) {
 	}
 	def onOff = "off"
 	if (powerState == "on") { onOff = "on" }
-	//	Socket-liveness cross-check: the platform pings the open remote socket every 30s,
-	//	so a websocket failure in the last cycle means the set stopped answering -- treat
-	//	as "off" even when REST PowerState still reports "on" (standby-lie on some sets).
+	//	recent websocket failure overrides a stale REST "on"
 	if (onOff == "on" && state.lastWsFailure &&
 		now() - state.lastWsFailure < 35000) {
 		onOff = "off"
 		powerState = "${powerState}/wsFailed"
 	}
-	//	Power-off cooldown: hold "off" briefly after an off() so a mid-shutdown read
-	//	can't bounce the switch back on.
+	//	hold off through the post-off cooldown
 	if (state.powerOffAt && now() - state.powerOffAt < 6000) {
 		onOff = "off"
 	}
@@ -209,14 +206,10 @@ def onPollParse(resp, data) {
 //	===== Capability Switch =====
 def on() {
 	logInfo("on: [frameTv: ${getDataValue("frameTv")}]")
-	//	Power-on is Wake-on-LAN only.  KEY_POWER is a toggle: sending it while the socket
-	//	is open (TV already on) can turn the set OFF -- on a Frame TV the hold powers it
-	//	off outright.  WoL is the safe wake path (matches Home Assistant).
+	//	WoL only: KEY_POWER is a toggle and can switch an on TV off
 	def wolMac = getDataValue("alternateWolMac")
 	def cmd = "FFFFFFFFFFFF$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac"
-	//	Broadcast the magic packet to both WoL ports (9 = discard, 7 = echo) -- two
-	//	packets, since a single packet to one port is occasionally missed by the TV
-	//	NIC in deep standby.
+	//	send to both WoL ports (9 and 7)
 	["255.255.255.255:9", "255.255.255.255:7"].each { dest ->
 		sendHubCommand(new hubitat.device.HubAction(cmd,
 			hubitat.device.Protocol.LAN,
@@ -241,13 +234,9 @@ def setPowerOnMode() {
 
 def off() {
 	logInfo("off: [frameTv: ${getDataValue("frameTv")}]")
-	//	Cooldown stamp: onPollParse holds "off" for a few seconds so a transitional poll
-	//	(TV still answering mid-shutdown) can't bounce the switch back on.
-	state.powerOffAt = now()
+	state.powerOffAt = now()	//	post-off cooldown for onPollParse
 	if (getDataValue("frameTv") == "true") {
-		//	Frame TVs enter art mode on a short press; a sustained hold is required to
-		//	power off.  Gate the hold on an open socket so the reconnect race cannot drop
-		//	the Press.  NOTE: connection-gated hold is unverified on Frame hardware.
+		//	Frame TV: short press = art mode, power-off needs a held press
 		if (device.currentValue("wsStatus") == "open") {
 			powerHold()
 		} else {

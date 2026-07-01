@@ -226,9 +226,7 @@ def sendMessage(funct, data) {
 		if (wsStat == "open") { close() }
 		state.wsData = data
 		def await = connect(funct)
-		//	Optional idle-close (default "never").  While open, the platform's 30s ping
-		//	keeps the socket healthy and its failure is the power oracle, so holding it
-		//	open is preferred; set a timeout only if a held socket disturbs TV standby.
+		//	optional idle-close; default "never" keeps the socket open
 		if (settings.wsIdleClose && settings.wsIdleClose != "never") {
 			runIn(settings.wsIdleClose.toInteger() * 60, close)
 		}
@@ -295,8 +293,7 @@ def webSocketStatus(message) {
 		state.currentFunction = "close"
 	} else if (message.substring(0,7) == "failure") {
 		status = "closed-failure"
-		//	Only a remote-socket failure reflects TV power; a frameArt failure (e.g.
-		//	art-app channel absent on a non-Frame set) must not poison the oracle.
+		//	only a remote-socket failure indicates TV power state
 		if (state.currentFunction == "remote") {
 			state.lastWsFailure = now()
 		}
