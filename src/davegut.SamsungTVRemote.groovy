@@ -71,7 +71,7 @@ def updated() {
 	sendEvent(name: "numberOfButtons", value: "60")
 	unschedule()
 	close()
-	state.wsData = ""
+	state.wsQueue = []
 	def updStatus = [:]
 	if (!deviceIp) {
 		logWarn("\n\n\t\t<b>Enter the deviceIp and Save Preferences</b>\n\n")

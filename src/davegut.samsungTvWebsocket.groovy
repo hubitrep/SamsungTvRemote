@@ -204,33 +204,27 @@ def sendKey(key, cmd = "Click") {
 	sendMessage("remote", JsonOutput.toJson(data).toString() )
 }
 
-def xxxsendMessage(funct, data) {
-	def wsStat = device.currentValue("wsStatus")
-	logDebug("sendMessage: [wsStatus: ${wsStat}, function: ${funct}, data: ${data}, connectType: ${state.currentFunction}")
-	if (wsStat != "open" || state.currentFunction != funct) {
-		connect(funct)
-		pauseExecution(500)
-	}
-	interfaces.webSocket.sendMessage(data)
-	runIn(600, close)
-}
-
 def sendMessage(funct, data) {
 	def wsStat = device.currentValue("wsStatus")
+	def prevFunct = state.currentFunction
 	Map logData = [method: "sendMessage", wsStat: wsStat, funct: funct, data: data]
-	logDebug("sendMessage: [wsStatus: ${wsStat}, function: ${funct}, data: ${data}, connectType: ${state.currentFunction}")
-	if (wsStat == "open" && state.currentFunction == funct) {
+	logDebug("sendMessage: [wsStatus: ${wsStat}, function: ${funct}, data: ${data}, connectType: ${prevFunct}]")
+	if (wsStat == "open" && prevFunct == funct) {
 		execMessage(data)
 		logData << [action: "execMessage"]
 	} else {
 		if (wsStat == "open") { close() }
-		state.wsData = data
-		def await = connect(funct)
+		//	queue the payload and connect; webSocketStatus drains the queue in order on
+		//	open, so a burst issued before the socket is up is not lost to a single slot.
+		if (prevFunct != funct || state.wsQueue == null) { state.wsQueue = [] }
+		if (state.wsQueue.size() >= 10) { state.wsQueue.remove(0) }	//	bound the queue
+		state.wsQueue << data
+		connect(funct)
 		//	optional idle-close; default "never" keeps the socket open
 		if (settings.wsIdleClose && settings.wsIdleClose != "never") {
 			runIn(settings.wsIdleClose.toInteger() * 60, close)
 		}
-		logData << [action: "connect"]
+		logData << [action: "connect", queued: state.wsQueue.size()]
 	}
 	logDebug(logData)
 }
@@ -278,10 +272,10 @@ def webSocketStatus(message) {
 	Map logData = [method: "webSocketStatus"]
 	if (message == "status: open") {
 		status = "open"
-		if (state.wsData != "") {
-			execMessage(state.wsData)
-			state.wsData = ""
-			logData << [action: "execMessage"]
+		if (state.wsQueue) {
+			state.wsQueue.each { execMessage(it) }
+			logData << [drained: state.wsQueue.size()]
+			state.wsQueue = []
 		}
 		if (state.pendingPowerHold) {
 			state.pendingPowerHold = false
@@ -299,6 +293,7 @@ def webSocketStatus(message) {
 		}
 		state.currentFunction = "close"
 		state.pendingPowerHold = false
+		state.wsQueue = []		//	undeliverable; don't fire stale keys on reconnect
 		close()
 	}
 	sendEvent(name: "wsStatus", value: status)
