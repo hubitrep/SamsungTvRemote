@@ -141,10 +141,12 @@ def configure() {
 		respData << [status: "OK", dni: alternateWolMac, modelYear: modelYear,
 					 frameTv: frameTv, tokenSupport: tokenSupport]
 		sendEvent(name: "artModeStatus", value: "none")
-		def data = [request:"get_artmode_status",
-					id: "${getDataValue("uuid")}"]
-		data = JsonOutput.toJson(data)
-		artModeCmd(data)
+		if (frameTv == "true") {
+			def data = [request:"get_artmode_status",
+						id: "${getDataValue("uuid")}"]
+			data = JsonOutput.toJson(data)
+			artModeCmd(data)
+		}
 	} else {
 		respData << tvData
 	}
@@ -721,23 +723,30 @@ def parse(resp) { // library marker davegut.samsungTvWebsocket, line 304
 					state.artModeWs = true // library marker davegut.samsungTvWebsocket, line 328
 				} // library marker davegut.samsungTvWebsocket, line 329
 				break // library marker davegut.samsungTvWebsocket, line 330
-			case "ms.error": // library marker davegut.samsungTvWebsocket, line 331
-			case "ms.channel.ready": // library marker davegut.samsungTvWebsocket, line 332
-			case "ms.channel.clientConnect": // library marker davegut.samsungTvWebsocket, line 333
-			case "ms.channel.clientDisconnect": // library marker davegut.samsungTvWebsocket, line 334
-			case "ms.remote.touchEnable": // library marker davegut.samsungTvWebsocket, line 335
-			case "ms.remote.touchDisable": // library marker davegut.samsungTvWebsocket, line 336
+			case "ms.channel.unauthorized": // library marker davegut.samsungTvWebsocket, line 331
+				//	token rejected; reset to the placeholder so the next connect prompts // library marker davegut.samsungTvWebsocket, line 332
+				//	the on-screen allow, which returns a fresh token via ms.channel.connect // library marker davegut.samsungTvWebsocket, line 333
+				state.token = "12345678" // library marker davegut.samsungTvWebsocket, line 334
+				logData << [TOKEN: "rejected, reset - accept the prompt on the TV"] // library marker davegut.samsungTvWebsocket, line 335
+				logWarn(logData) // library marker davegut.samsungTvWebsocket, line 336
 				break // library marker davegut.samsungTvWebsocket, line 337
-			default: // library marker davegut.samsungTvWebsocket, line 338
-				logData << [STATUS: "Not Parsed", DATA: resp.data] // library marker davegut.samsungTvWebsocket, line 339
-				break // library marker davegut.samsungTvWebsocket, line 340
-		} // library marker davegut.samsungTvWebsocket, line 341
-		logDebug(logData) // library marker davegut.samsungTvWebsocket, line 342
-	} catch (e) { // library marker davegut.samsungTvWebsocket, line 343
-		logData << [STATUS: "unhandled", ERROR: e] // library marker davegut.samsungTvWebsocket, line 344
-		logWarn(logData) // library marker davegut.samsungTvWebsocket, line 345
-	} // library marker davegut.samsungTvWebsocket, line 346
-} // library marker davegut.samsungTvWebsocket, line 347
+			case "ms.error": // library marker davegut.samsungTvWebsocket, line 338
+			case "ms.channel.ready": // library marker davegut.samsungTvWebsocket, line 339
+			case "ms.channel.clientConnect": // library marker davegut.samsungTvWebsocket, line 340
+			case "ms.channel.clientDisconnect": // library marker davegut.samsungTvWebsocket, line 341
+			case "ms.remote.touchEnable": // library marker davegut.samsungTvWebsocket, line 342
+			case "ms.remote.touchDisable": // library marker davegut.samsungTvWebsocket, line 343
+				break // library marker davegut.samsungTvWebsocket, line 344
+			default: // library marker davegut.samsungTvWebsocket, line 345
+				logData << [STATUS: "Not Parsed", DATA: resp.data] // library marker davegut.samsungTvWebsocket, line 346
+				break // library marker davegut.samsungTvWebsocket, line 347
+		} // library marker davegut.samsungTvWebsocket, line 348
+		logDebug(logData) // library marker davegut.samsungTvWebsocket, line 349
+	} catch (e) { // library marker davegut.samsungTvWebsocket, line 350
+		logData << [STATUS: "unhandled", ERROR: e] // library marker davegut.samsungTvWebsocket, line 351
+		logWarn(logData) // library marker davegut.samsungTvWebsocket, line 352
+	} // library marker davegut.samsungTvWebsocket, line 353
+} // library marker davegut.samsungTvWebsocket, line 354
 // ~~~~~ end include (1) davegut.samsungTvWebsocket ~~~~~
 // ~~~~~ start include (2) davegut.samsungTvApps ~~~~~
 library ( // library marker davegut.samsungTvApps, line 1
@@ -1575,7 +1584,7 @@ library ( // library marker davegut.Logging, line 1
  // library marker davegut.Logging, line 9
 def nameSpace() { return "davegut" } // library marker davegut.Logging, line 10
  // library marker davegut.Logging, line 11
-def version() { return "2.3.9j" } // library marker davegut.Logging, line 12
+def version() { return "2.3.9k" } // library marker davegut.Logging, line 12
  // library marker davegut.Logging, line 13
 def label() { // library marker davegut.Logging, line 14
 	if (device) {  // library marker davegut.Logging, line 15

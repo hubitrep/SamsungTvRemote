@@ -141,10 +141,12 @@ def configure() {
 		respData << [status: "OK", dni: alternateWolMac, modelYear: modelYear,
 					 frameTv: frameTv, tokenSupport: tokenSupport]
 		sendEvent(name: "artModeStatus", value: "none")
-		def data = [request:"get_artmode_status",
-					id: "${getDataValue("uuid")}"]
-		data = JsonOutput.toJson(data)
-		artModeCmd(data)
+		if (frameTv == "true") {
+			def data = [request:"get_artmode_status",
+						id: "${getDataValue("uuid")}"]
+			data = JsonOutput.toJson(data)
+			artModeCmd(data)
+		}
 	} else {
 		respData << tvData
 	}

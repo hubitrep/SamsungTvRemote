@@ -328,6 +328,13 @@ def parse(resp) {
 					state.artModeWs = true
 				}
 				break
+			case "ms.channel.unauthorized":
+				//	token rejected; reset to the placeholder so the next connect prompts
+				//	the on-screen allow, which returns a fresh token via ms.channel.connect
+				state.token = "12345678"
+				logData << [TOKEN: "rejected, reset - accept the prompt on the TV"]
+				logWarn(logData)
+				break
 			case "ms.error":
 			case "ms.channel.ready":
 			case "ms.channel.clientConnect":
