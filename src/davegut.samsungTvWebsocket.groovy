@@ -23,6 +23,7 @@ command "pause"
 command "play"
 command "stop"
 command "sendKey", ["string"]
+command "getInstalledApps"		//	diagnostic: query the TV's installed-app list (WS)
 //	Cursor and Entry Control
 command "arrowLeft"
 command "arrowRight"
@@ -204,6 +205,15 @@ def sendKey(key, cmd = "Click") {
 	sendMessage("remote", JsonOutput.toJson(data).toString() )
 }
 
+def getInstalledApps() {
+	//	Diagnostic: ask the TV for its installed-app list over the remote channel.
+	//	2020+ Tizen often refuses this; parse() "ed.installedApp.get" logs any result.
+	def data = [method:"ms.channel.emit",
+				params:[event:"ed.installedApp.get", to:"host"]]
+	sendMessage("remote", JsonOutput.toJson(data).toString())
+	logInfo("getInstalledApps: request sent (watch for 'ed.installedApp.get' in logs)")
+}
+
 def sendMessage(funct, data) {
 	def wsStat = device.currentValue("wsStatus")
 	def prevFunct = state.currentFunction
@@ -327,6 +337,12 @@ def parse(resp) {
 					logData << [artModeStatus: status]
 					state.artModeWs = true
 				}
+				break
+			case "ed.installedApp.get":
+				def payload = resp.data
+				if (payload instanceof String) { payload = parseJson(payload) }
+				def appList = payload?.data
+				logInfo("ed.installedApp.get: [count: ${appList ? appList.size() : 0}, apps: ${appList?.collect { [name: it.name, appId: it.appId] }}]")
 				break
 			case "ms.channel.unauthorized":
 				//	token rejected; reset to the placeholder so the next connect prompts
