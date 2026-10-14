@@ -80,7 +80,8 @@ def updated() {
 	sendEvent(name: "numberOfButtons", value: "60")
 	unschedule()
 	close()
-	["wsQueue", "currentFunction", "pendingPowerHold", "powerProbeAt"].each { state.remove(it) }
+	["wsQueue", "currentFunction", "pendingPowerHold", "powerProbeAt",
+	 "wsData", "standbyTest", "configured", "onPollCount"].each { state.remove(it) }
 	sendEvent(name: "presetUpdateNext", value: "false")
 	def updStatus = [:]
 	if (!deviceIp) {
@@ -152,6 +153,11 @@ def configure() {
 		}
 		def uuid = tvData.device.duid.substring(5)
 		updateDataValue("uuid", uuid)
+		//	for support: what the TV is and what its REST reply carries
+		if (tvData.device.modelName) { updateDataValue("modelName", tvData.device.modelName) }
+		if (tvData.device.model) { updateDataValue("platform", tvData.device.model) }
+		if (tvData.version) { updateDataValue("apiVersion", tvData.version) }
+		updateDataValue("powerStateReported", (tvData.device.PowerState != null).toString())
 		respData << [status: "OK", dni: alternateWolMac, modelYear: modelYear,
 					 frameTv: frameTv, tokenSupport: tokenSupport]
 		sendEvent(name: "artModeStatus", value: "none")		//	getArtModeStatus (scheduled above) asks a Frame
@@ -199,6 +205,12 @@ def onPollParse(resp, data) {
 	}
 	if (info != null) {
 		powerState = info.PowerState
+		String reported = (powerState != null).toString()
+		if (getDataValue("powerStateReported") != reported) {
+			//	firmware updates have dropped PowerState; power then comes from the websocket
+			logInfo("onPollParse: [powerStateReported: ${reported}]")
+			updateDataValue("powerStateReported", reported)
+		}
 		if (powerState == null) {
 			//	newer firmware omits PowerState; fall back to remote-socket liveness
 			powerState = "absent"
@@ -1794,7 +1806,7 @@ library ( // library marker davegut.Logging, line 1
  // library marker davegut.Logging, line 10
 def nameSpace() { return "davegut" } // library marker davegut.Logging, line 11
  // library marker davegut.Logging, line 12
-def version() { return "2.4.0" } // library marker davegut.Logging, line 13
+def version() { return "2.4.1" } // library marker davegut.Logging, line 13
  // library marker davegut.Logging, line 14
 def label() { // library marker davegut.Logging, line 15
 	if (device) {  // library marker davegut.Logging, line 16

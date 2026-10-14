@@ -31,6 +31,15 @@ After updating, open each TV device and click Save Preferences.
 
 ## Changes
 
+### 2.4.1
+
+- The device's Data section shows the TV's model number (`modelName`), platform (`platform`) and
+  REST API version (`apiVersion`), read at Save Preferences with the TV on. Include them when
+  asking for help.
+- `powerStateReported` says whether the TV reports `PowerState`. When it is `false`, power state
+  comes from the websocket. The poll updates it, so a firmware update that drops the field shows up.
+- State left by older versions (`wsData`, `standbyTest`, `configured`, `onPollCount`) is removed.
+
 ### 2.4.0
 
 - The socket counts as ready when the TV sends `ms.channel.connect`, not when the connection opens.
