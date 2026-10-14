@@ -282,6 +282,13 @@ def webSocketStatus(message) {
 	Map logData = [method: "webSocketStatus"]
 	if (message == "status: open") {
 		status = "open"
+		if (state.currentFunction == "remote") {
+			state.lastWsFailure = null		//	an open remote socket supersedes an earlier failure
+			if (state.powerProbeAt) {
+				state.powerProbeAt = null
+				probeOpened()
+			}
+		}
 		if (state.wsQueue) {
 			state.wsQueue.each { execMessage(it) }
 			logData << [drained: state.wsQueue.size()]
@@ -300,6 +307,10 @@ def webSocketStatus(message) {
 		//	only a remote-socket failure indicates TV power state
 		if (state.currentFunction == "remote") {
 			state.lastWsFailure = now()
+			if (state.powerProbeAt) {
+				state.powerProbeAt = null
+				probeFailed()
+			}
 		}
 		state.currentFunction = "close"
 		state.pendingPowerHold = false
@@ -310,6 +321,9 @@ def webSocketStatus(message) {
 	logData << [wsStatus: status]
 	logDebug(logData)
 }
+
+def probeOpened() { setPowerState("on", [method: "probePower", powerState: "absent/wsOpen"]) }
+def probeFailed() { setPowerState("off", [method: "probePower", powerState: "absent/wsFailed"]) }
 
 def parse(resp) {
 	def logData = [method: "parse"]

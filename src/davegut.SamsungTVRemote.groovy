@@ -176,25 +176,52 @@ def updateDriver() {
 
 def onPollParse(resp, data) {
 	def powerState
+	def onOff = "off"
 	if (resp.status == 200) {
 		powerState = new JsonSlurper().parseText(resp.data).device.PowerState
+		if (powerState == null) {
+			//	newer firmware omits PowerState; fall back to remote-socket liveness
+			powerState = "absent"
+			if (device.currentValue("wsStatus") == "open" && state.currentFunction == "remote") {
+				onOff = "on"
+			} else if (!powerOffHeld()) {		//	a TV shutting down still accepts the socket
+				probePower()
+				return
+			}
+		}
 	} else {
 		powerState = "NC"
 	}
-	def onOff = "off"
 	if (powerState == "on") { onOff = "on" }
+	setPowerState(onOff, [method: "onPollParse", httpStatus: resp.status, powerState: powerState])
+}
+
+//	open the remote socket; webSocketStatus reports the result to setPowerState
+def probePower() {
+	if (state.powerProbeAt && now() - state.powerProbeAt < 20000) { return }
+	state.powerProbeAt = now()
+	logDebug([method: "probePower"])
+	connect("remote")
+}
+
+//	the TV answers for a few seconds after power-off: skip the next poll, plus 5 s
+def powerOffHeld() {
+	def secs = (pollInterval && pollInterval != "off") ? pollInterval.toInteger() : 30
+	return state.powerOffAt && now() - state.powerOffAt < (secs + 5) * 1000
+}
+
+def setPowerState(onOff, Map logData) {
 	//	recent websocket failure overrides a stale REST "on"
 	if (onOff == "on" && state.lastWsFailure &&
 		now() - state.lastWsFailure < 35000) {
 		onOff = "off"
-		powerState = "${powerState}/wsFailed"
+		logData << [wsFailed: true]
 	}
 	//	hold off through the post-off cooldown
-	if (state.powerOffAt && now() - state.powerOffAt < 6000) {
+	if (powerOffHeld()) {
 		onOff = "off"
 	}
-	Map logData = [method: "onPollParse", httpStatus: resp.status,
-				   powerState: powerState, onOff: onOff]
+	logData << [onOff: onOff]
 	if (device.currentValue("switch") != onOff) {
 		sendEvent(name: "switch", value: onOff)
 		logData << [switch: onOff]
@@ -210,6 +237,7 @@ def onPollParse(resp, data) {
 //	===== Capability Switch =====
 def on() {
 	logInfo("on: [frameTv: ${getDataValue("frameTv")}]")
+	state.powerOffAt = null
 	//	WoL only: KEY_POWER is a toggle and can switch an on TV off
 	def wolMac = getDataValue("alternateWolMac")
 	def cmd = "FFFFFFFFFFFF$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac"
@@ -250,6 +278,7 @@ def off() {
 	} else {
 		sendKey("POWER")
 		runIn(1, onPoll)
+		runIn(3, close)		//	an open socket outlives the TV and would read as on
 	}
 }
 
@@ -261,6 +290,7 @@ def powerHold() {
 def powerHoldRelease() {
 	sendKey("POWER", "Release")
 	runIn(2, onPoll)
+	runIn(3, close)
 }
 
 def setPowerOffMode() {
