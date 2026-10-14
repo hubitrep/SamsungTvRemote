@@ -119,7 +119,11 @@ def configure() {
 		}
 	} catch (error) {
 		tvData << [status: "error", data: error]
-		logError("configure: TV Off during setup or Invalid IP address.\n\t\tTurn TV On and Run CONFIGURE or Save Preferences!")
+		if (getDataValue("alternateWolMac")) {
+			tvData << [action: "kept saved TV settings"]
+		} else {
+			logError("configure: TV Off during setup or Invalid IP address.\n\t\tTurn TV On and Run CONFIGURE or Save Preferences!")
+		}
 
 	}
 	if (!tvData.status) {
@@ -903,8 +907,8 @@ def appCloseParse(resp, data) { // library marker davegut.samsungTvApps, line 73
  // library marker davegut.samsungTvApps, line 88
 def updateAppCodes() { // library marker davegut.samsungTvApps, line 89
 	Map logData = [method: "updateAppCodes", findAppCodes: findAppCodes] // library marker davegut.samsungTvApps, line 90
-	if (findAppCodes != "off" &&  // library marker davegut.samsungTvApps, line 91
-		device.currentValue("switch") == "on") { // library marker davegut.samsungTvApps, line 92
+	def scan = findAppCodes in ["startOver", "find"] // library marker davegut.samsungTvApps, line 91
+	if (scan && device.currentValue("switch") == "on") { // library marker davegut.samsungTvApps, line 92
 		device.updateSetting("findAppCodes", [type:"enum", value: "off"]) // library marker davegut.samsungTvApps, line 93
 		if (findAppCodes == "startOver") {  // library marker davegut.samsungTvApps, line 94
 			state.appData = [:] // library marker davegut.samsungTvApps, line 95
@@ -917,7 +921,7 @@ def updateAppCodes() { // library marker davegut.samsungTvApps, line 89
 		logData << [codesToCheck: appIds.size(), status: "OK"] // library marker davegut.samsungTvApps, line 102
 		runIn(5, getAppData) // library marker davegut.samsungTvApps, line 103
 		logInfo(logData) // library marker davegut.samsungTvApps, line 104
-	} else if (device.currentValue("switch") == "off") { // library marker davegut.samsungTvApps, line 105
+	} else if (scan) { // library marker davegut.samsungTvApps, line 105
 		logData << [status: "FAILED", reason: "tv off"] // library marker davegut.samsungTvApps, line 106
 		logWarn(logData) // library marker davegut.samsungTvApps, line 107
 	} // library marker davegut.samsungTvApps, line 108

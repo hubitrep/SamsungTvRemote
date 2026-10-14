@@ -48,6 +48,8 @@ After updating, open each TV device and click Save Preferences.
 - The art-mode socket is no longer opened on TVs that are not Frames.
 - Key payloads include `Option: "false"`, as other Samsung TV clients send.
 - New preference: close the websocket after an idle period (default: never).
+- With the TV off, a code update or Save Preferences no longer logs an error once the device is set
+  up (the saved TV settings are kept), and no warning about the app-code scan unless one was asked for.
 - After a code update the driver re-initializes once on its next poll.
 - Fixes: `appData` NPE, the app-launch request body, and four preset defects.
 - New command `getInstalledApps`, a diagnostic that asks the TV for its app list and logs the reply.

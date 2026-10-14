@@ -119,7 +119,11 @@ def configure() {
 		}
 	} catch (error) {
 		tvData << [status: "error", data: error]
-		logError("configure: TV Off during setup or Invalid IP address.\n\t\tTurn TV On and Run CONFIGURE or Save Preferences!")
+		if (getDataValue("alternateWolMac")) {
+			tvData << [action: "kept saved TV settings"]
+		} else {
+			logError("configure: TV Off during setup or Invalid IP address.\n\t\tTurn TV On and Run CONFIGURE or Save Preferences!")
+		}
 
 	}
 	if (!tvData.status) {

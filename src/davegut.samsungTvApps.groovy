@@ -88,8 +88,8 @@ def appCloseParse(resp, data) {
 
 def updateAppCodes() {
 	Map logData = [method: "updateAppCodes", findAppCodes: findAppCodes]
-	if (findAppCodes != "off" && 
-		device.currentValue("switch") == "on") {
+	def scan = findAppCodes in ["startOver", "find"]
+	if (scan && device.currentValue("switch") == "on") {
 		device.updateSetting("findAppCodes", [type:"enum", value: "off"])
 		if (findAppCodes == "startOver") { 
 			state.appData = [:]
@@ -102,7 +102,7 @@ def updateAppCodes() {
 		logData << [codesToCheck: appIds.size(), status: "OK"]
 		runIn(5, getAppData)
 		logInfo(logData)
-	} else if (device.currentValue("switch") == "off") {
+	} else if (scan) {
 		logData << [status: "FAILED", reason: "tv off"]
 		logWarn(logData)
 	}
