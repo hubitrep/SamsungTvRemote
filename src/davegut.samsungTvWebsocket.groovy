@@ -6,6 +6,7 @@ library (
 	category: "utilities",
 	documentationLink: ""
 )
+//	Modified by hubitrep in 2026. Changes: https://github.com/hubitrep/SamsungTvRemote#changes
 
 import groovy.json.JsonOutput
 

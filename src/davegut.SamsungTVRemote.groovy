@@ -9,6 +9,9 @@ b.	Added buttons to support preset functions in dashboards.
 c.	Added app codes to built-in app search list.
 d.  Created methods to support adding running app automatically to state.appData
 	if the SmartThings interface is enabled.
+===== Modifications =======================================================================
+This file was modified by hubitrep in 2026 (versions 2.3.10 and later).
+Changes: https://github.com/hubitrep/SamsungTvRemote#changes
 ===========================================================================================*/
 def driverVer() { return version() }
 import groovy.json.JsonOutput
@@ -19,7 +22,7 @@ metadata {
 				namespace: "davegut",
 				author: "David Gutheinz",
 				singleThreaded: true,
-				importUrl: "https://raw.githubusercontent.com/DaveGut/HubitatActive/master/SamsungTvRemote/SamsungTVRemote.groovy"
+				importUrl: "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVRemote.groovy"
 			   ){
 		capability "Refresh"
 		capability "Configuration"

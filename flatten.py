@@ -7,14 +7,18 @@ wrapped in `// ~~~~~ start/end include ~~~~~` delimiters, every library line
 annotated with a `// library marker davegut.X, line N` line-map comment so
 runtime error line numbers map back to the library source.
 
-Usage:  python3 flatten.py   ->   writes SamsungTVRemote.groovy
+Also rebuilds SamsungTVRemote.zip, the Hubitat bundle of the same src/ files.
+
+Usage:  python3 flatten.py   ->   writes SamsungTVRemote.groovy and SamsungTVRemote.zip
 """
-import os, re
+import os, re, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "src")
 CORE = "davegut.SamsungTVRemote.groovy"
 OUT = os.path.join(HERE, "SamsungTVRemote.groovy")
+BUNDLE = os.path.join(HERE, "SamsungTVRemote.zip")
+BUNDLE_NAME = "SamsungTVRemote_4_1"
 
 
 def flatten():
@@ -31,6 +35,21 @@ def flatten():
         out.append(f"// ~~~~~ end include ({i}) davegut.{name} ~~~~~")
     open(OUT, "w").write("\n".join(out) + "\n")
     print(f"wrote {OUT} ({len(out)} lines; libraries: {', '.join(order)})")
+    bundle()
+
+
+def bundle():
+    """install.txt/update.txt list the namespace, bundle name, then each file by type."""
+    libs = [f"davegut.{n}.groovy" for n in ("Logging", "samsungTvApps", "samsungTvWebsocket",
+            "samsungTvST", "SmartThingsInterface", "samsungTvPresets", "samsungTvTEST")]
+    listing = "\n".join(["davegut", BUNDLE_NAME] + [f"library {f}" for f in libs]
+                        + [f"driver {CORE}"])
+    with zipfile.ZipFile(BUNDLE, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in libs + [CORE]:
+            z.write(os.path.join(SRC, f), f)
+        z.writestr("install.txt", listing)
+        z.writestr("update.txt", listing)
+    print(f"wrote {BUNDLE} ({len(libs) + 1} files)")
 
 
 if __name__ == "__main__":

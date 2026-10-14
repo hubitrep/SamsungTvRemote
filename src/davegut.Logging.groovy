@@ -6,10 +6,11 @@ library (
 	category: "utilities",
 	documentationLink: ""
 )
+//	Modified by hubitrep in 2026. Changes: https://github.com/hubitrep/SamsungTvRemote#changes
 
 def nameSpace() { return "davegut" }
 
-def version() { return "2.3.9m" }
+def version() { return "2.3.10" }
 
 def label() {
 	if (device) { 
