@@ -51,7 +51,8 @@ After updating, open each TV device and click Save Preferences.
 - Presets, fast forward/back and art mode at power-on no longer pause the driver; their steps are
   scheduled instead, so they act on the TV's reply rather than on the values from before.
 - The app-code scan no longer stops power polling, and a bad reply no longer ends the scan.
-- `mute` and `unmute` set the state instead of toggling it.
+- With SmartThings, `mute` and `unmute` set the state instead of toggling it. Without it the
+  driver can't read the mute state, so both still send the mute key.
 - SmartThings: commands no longer block the driver. An expired key (HTTP 401) is reported once and
   SmartThings polling stops until a new key is saved; channel changes then fall back to remote keys.
 - Frame TVs: `artMode` and `artModeStatus` are always declared, and the art channel connects
