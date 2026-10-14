@@ -9,15 +9,18 @@ library (
 //	Modified by hubitrep in 2026. Changes: https://github.com/hubitrep/SamsungTvRemote#changes
 
 import groovy.json.JsonOutput
+import groovy.transform.Field
+import java.util.concurrent.ConcurrentHashMap
+
+//	socket state is kept in memory, so a hub reboot or code push starts from "closed"
+@Field static ConcurrentHashMap<String, Map> wsMem = new ConcurrentHashMap<String, Map>()
 
 command "webSocketClose"
 command "webSocketOpen"
 command "close"
 attribute "wsStatus", "string"
-if (getDataValue("frameTv") == "true") {
-	command "artMode"
-	attribute "artModeStatus", "string"
-}
+command "artMode"
+attribute "artModeStatus", "string"
 command "ambientMode"
 //	Remote Control Keys (samsungTV-Keys)
 command "pause"
@@ -109,9 +112,16 @@ def ambientMode() {
 }
 
 //	== Remote Commands
-def mute() { sendKeyThenRefresh("MUTE") }
+//	KEY_MUTE toggles; SmartThings sets the state directly
+def mute() {
+	if (stConnected()) { setMuteST("mute") }
+	else if (device.currentValue("mute") != "muted") { sendKey("MUTE") }
+}
 
-def unmute() { mute() }
+def unmute() {
+	if (stConnected()) { setMuteST("unmute") }
+	else if (device.currentValue("mute") != "unmuted") { sendKey("MUTE") }
+}
 
 def volumeUp() { sendKeyThenRefresh("VOLUP") }
 
@@ -129,15 +139,15 @@ def Return() { sendKeyThenRefresh("RETURN") }
 
 def fastBack() {
 	sendKey("LEFT", "Press")
-	pauseExecution(1000)
-	sendKey("LEFT", "Release")
+	runInMillis(1000, keyRelease, [data: [key: "LEFT"]])
 }
 
 def fastForward() {
 	sendKey("RIGHT", "Press")
-	pauseExecution(1000)
-	sendKey("RIGHT", "Release")
+	runInMillis(1000, keyRelease, [data: [key: "RIGHT"]])
 }
+
+def keyRelease(data) { sendKey(data.key, "Release") }
 
 def arrowLeft() { sendKey("LEFT") }
 
@@ -175,7 +185,7 @@ def previousTrack() { channelDown() }
 
 //	Uses ST interface if available.
 def channelSet(channel) {
-	if (connectST) {
+	if (stConnected()) {
 		setTvChannel(channel)
 	} else {
 		for (int i = 0; i < channel.length(); i++) {
@@ -193,7 +203,7 @@ def showMessage() { logWarn("showMessage: not implemented") }
 //	== WebSocket Communications / Parse
 def sendKeyThenRefresh(key) {
 	sendKey(key)
-	if (connectST) { runIn(3, deviceRefresh) }
+	if (stConnected()) { runIn(3, deviceRefresh) }
 }
 
 def sendKey(key, cmd = "Click") {
@@ -215,30 +225,47 @@ def getInstalledApps() {
 	logInfo("getInstalledApps: request sent (watch for 'ed.installedApp.get' in logs)")
 }
 
-def sendMessage(funct, data) {
-	def wsStat = device.currentValue("wsStatus")
-	def prevFunct = state.currentFunction
-	Map logData = [method: "sendMessage", wsStat: wsStat, funct: funct, data: data]
-	logDebug("sendMessage: [wsStatus: ${wsStat}, function: ${funct}, data: ${data}, connectType: ${prevFunct}]")
-	if (wsStat == "open" && prevFunct == funct) {
-		execMessage(data)
-		logData << [action: "execMessage"]
-	} else {
-		if (wsStat == "open") { close() }
-		//	queue the payload and connect; webSocketStatus drains the queue in order on
-		//	open, so a burst issued before the socket is up is not lost to a single slot.
-		if (prevFunct != funct || state.wsQueue == null) { state.wsQueue = [] }
-		if (state.wsQueue.size() >= 10) { state.wsQueue.remove(0) }	//	bound the queue
-		state.wsQueue << data
-		connect(funct)
-		//	optional idle-close; default "never" keeps the socket open
-		if (settings.wsIdleClose && settings.wsIdleClose != "never") {
-			runIn(settings.wsIdleClose.toInteger() * 60, close)
-		}
-		logData << [action: "connect", queued: state.wsQueue.size()]
+Map ws() {
+	String key = device.id.toString()
+	Map m = wsMem[key]
+	if (m == null) {
+		m = [phase: "closed", funct: null, queue: [], queuedAt: null, connectingAt: null,
+			 holdAt: null, probeAt: null, closeAfterSend: false]
+		wsMem[key] = m
 	}
+	return m
+}
+
+//	phases: closed -> connecting -> open (transport up) -> ready (TV sent ms.channel.connect)
+def sendMessage(funct, data) {
+	Map s = ws()
+	Map logData = [method: "sendMessage", phase: s.phase, funct: funct, socketFunct: s.funct]
+	if (s.phase == "ready" && s.funct == funct) {
+		execMessage(data)
+		logData << [action: "sent"]
+	} else {
+		if (s.funct != funct && s.phase != "closed") { close() }
+		if (s.funct != funct) { s.queue = [] }
+		if (!s.queue) { s.queuedAt = now() }
+		if (s.queue.size() >= 10) { s.queue.remove(0) }
+		s.queue << data
+		boolean stale = s.connectingAt && now() - s.connectingAt > 10000
+		if (s.phase == "closed" || s.funct != funct || stale) {
+			connect(funct)
+			logData << [action: "connect"]
+		}
+		logData << [queued: s.queue.size()]
+	}
+	armIdleClose()
 	logDebug(logData)
 }
+
+def armIdleClose() {
+	if (settings.wsIdleClose && settings.wsIdleClose != "never") {
+		runIn(settings.wsIdleClose.toInteger() * 60, close)
+	}
+}
+
 def execMessage(data) {
 	interfaces.webSocket.sendMessage(data)
 }
@@ -250,80 +277,140 @@ def connect(funct) {
 	logDebug("connect: function = ${funct}")
 	def url
 	def name = "SHViaXRhdCBTYW1zdW5nIFJlbW90ZQ=="
+	//	the art channel takes no token; 2024+ Frames stall the handshake when given one
 	if (getDataValue("tokenSupport") == "true") {
 		if (funct == "remote") {
 			url = "wss://${deviceIp}:8002/api/v2/channels/samsung.remote.control?name=${name}&token=${state.token}"
 		} else if (funct == "frameArt") {
-			url = "wss://${deviceIp}:8002/api/v2/channels/com.samsung.art-app?name=${name}&token=${state.token}"
-		} else {
-			logWarn("sendMessage: Invalid Function = ${funct}, tokenSupport = true")
+			url = "wss://${deviceIp}:8002/api/v2/channels/com.samsung.art-app?name=${name}"
 		}
 	} else {
 		if (funct == "remote") {
 			url = "ws://${deviceIp}:8001/api/v2/channels/samsung.remote.control?name=${name}"
 		} else if (funct == "frameArt") {
 			url = "ws://${deviceIp}:8001/api/v2/channels/com.samsung.art-app?name=${name}"
-		} else {
-			logWarn("sendMessage: Invalid Function = ${funct}, tokenSupport = false")
 		}
 	}
-	state.currentFunction = funct
+	if (url == null) {
+		logWarn("connect: invalid function ${funct}")
+		return
+	}
+	Map s = ws()
+	s.phase = "connecting"
+	s.funct = funct
+	s.connectingAt = now()
 	interfaces.webSocket.connect(url, ignoreSSLIssues: true)
-	return
 }
 
 def close() {
 	logDebug("close")
+	Map s = ws()
+	s.phase = "closed"
+	s.queue = []
+	s.holdAt = null
+	s.closeAfterSend = false
+	s.connectingAt = null
 	interfaces.webSocket.close()
 	sendEvent(name: "wsStatus", value: "closed")
 }
 
 def webSocketStatus(message) {
-	def status
-	Map logData = [method: "webSocketStatus"]
-	if (message == "status: open") {
-		status = "open"
-		if (state.currentFunction == "remote") {
-			state.lastWsFailure = null		//	an open remote socket supersedes an earlier failure
-			if (state.powerProbeAt) {
-				state.powerProbeAt = null
-				probeOpened()
-			}
+	Map s = ws()
+	Map logData = [method: "webSocketStatus", message: message, funct: s.funct]
+	if (message.startsWith("status: open")) {
+		s.phase = "open"
+		s.connectingAt = null
+		sendEvent(name: "wsStatus", value: "open")
+		//	the TV normally confirms at once with ms.channel.connect
+		runIn(3, wsReadyTimeout)
+	} else if (message.startsWith("status: closing")) {
+		//	a socket being replaced reports closing after the new connect started
+		if (s.phase != "connecting") {
+			s.phase = "closed"
+			s.queue = []
+			s.holdAt = null
+			s.closeAfterSend = false
+			sendEvent(name: "wsStatus", value: "closed")
 		}
-		if (state.wsQueue) {
-			state.wsQueue.each { execMessage(it) }
-			logData << [drained: state.wsQueue.size()]
-			state.wsQueue = []
-		}
-		if (state.pendingPowerHold) {
-			state.pendingPowerHold = false
-			logData << [action: "powerHold"]
-			powerHold()
-		}
-	} else if (message == "status: closing") {
-		status = "closed"
-		state.currentFunction = "close"
-	} else if (message.substring(0,7) == "failure") {
-		status = "closed-failure"
-		//	only a remote-socket failure indicates TV power state
-		if (state.currentFunction == "remote") {
-			state.lastWsFailure = now()
-			if (state.powerProbeAt) {
-				state.powerProbeAt = null
-				probeFailed()
-			}
-		}
-		state.currentFunction = "close"
-		state.pendingPowerHold = false
-		state.wsQueue = []		//	undeliverable; don't fire stale keys on reconnect
-		close()
+	} else if (message.startsWith("failure")) {
+		wsFailed()
+		sendEvent(name: "wsStatus", value: "closed-failure")
+	} else {
+		logData << [action: "ignored"]
 	}
-	sendEvent(name: "wsStatus", value: status)
-	logData << [wsStatus: status]
 	logDebug(logData)
 }
 
-def probeOpened() { setPowerState("on", [method: "probePower", powerState: "absent/wsOpen"]) }
+def wsFailed() {
+	Map s = ws()
+	//	only a remote-socket failure indicates TV power state
+	if (s.funct == "remote") {
+		state.lastWsFailure = now()
+		if (s.probeAt) {
+			s.probeAt = null
+			probeFailed()
+		}
+	}
+	s.phase = "closed"
+	s.queue = []		//	undeliverable; don't fire stale keys on reconnect
+	s.holdAt = null
+	s.closeAfterSend = false
+	s.connectingAt = null
+	interfaces.webSocket.close()
+}
+
+def wsReady() {
+	Map s = ws()
+	if (s.phase == "ready") { return }
+	s.phase = "ready"
+	unschedule("wsReadyTimeout")
+	Map logData = [method: "wsReady", funct: s.funct]
+	if (s.funct == "remote") {
+		state.lastWsFailure = null
+		if (s.probeAt) {
+			s.probeAt = null
+			probeOpened()
+		}
+	}
+	if (s.queue) {
+		//	keys queued long ago belong to an earlier attempt; a late KEY_POWER would toggle the TV
+		if (s.queuedAt && now() - s.queuedAt < 15000) {
+			s.queue.each { execMessage(it) }
+			logData << [drained: s.queue.size()]
+		} else {
+			logData << [discarded: s.queue.size()]
+		}
+		s.queue = []
+	}
+	if (s.holdAt) {
+		boolean fresh = now() - s.holdAt < 15000
+		s.holdAt = null
+		if (fresh) {
+			logData << [action: "powerHold"]
+			powerHold()
+		}
+	}
+	if (s.closeAfterSend) {
+		s.closeAfterSend = false
+		runIn(2, close)
+	}
+	logDebug(logData)
+}
+
+def wsReadyTimeout() {
+	Map s = ws()
+	if (s.phase != "open") { return }
+	if (s.probeAt) {
+		//	accepted but never confirmed: the TV is asleep
+		s.probeAt = null
+		probeFailed()
+		close()
+	} else {
+		wsReady()
+	}
+}
+
+def probeOpened() { setPowerState("on", [method: "probePower", powerState: "absent/wsReady"]) }
 def probeFailed() { setPowerState("off", [method: "probePower", powerState: "absent/wsFailed"]) }
 
 def parse(resp) {
@@ -334,13 +421,22 @@ def parse(resp) {
 		logData << [EVENT: event]
 		switch(event) {
 			case "ms.channel.connect":
-				def newToken = resp.data.token
+				def newToken = resp.data?.token
 				if (newToken != null && newToken != state.token) {
 					state.token = newToken
 					logData << [TOKEN: "updated"]
-				} else {
-					logData << [TOKEN: "noChange"]
 				}
+				wsReady()
+				break
+			case "ms.channel.timeOut":
+				//	connected, but the TV did not confirm: it is asleep
+				Map s = ws()
+				if (s.funct == "remote") { state.lastWsFailure = now() }
+				if (s.probeAt) {
+					s.probeAt = null
+					probeFailed()
+				}
+				close()
 				break
 			case "d2d_service_message":
 				def data = parseJson(resp.data)
@@ -363,7 +459,12 @@ def parse(resp) {
 				//	token rejected; reset to the placeholder so the next connect prompts
 				//	the on-screen allow, which returns a fresh token via ms.channel.connect
 				state.token = "12345678"
-				logData << [TOKEN: "rejected, reset - accept the prompt on the TV"]
+				Map s = ws()
+				//	the TV answered, so it is on
+				if (s.probeAt) {
+					s.probeAt = null
+					probeOpened()
+				}
 				logWarn(logData)
 				break
 			case "ms.error":

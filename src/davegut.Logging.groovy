@@ -10,7 +10,7 @@ library (
 
 def nameSpace() { return "davegut" }
 
-def version() { return "2.3.10" }
+def version() { return "2.4.0" }
 
 def label() {
 	if (device) { 
@@ -41,7 +41,7 @@ def setLogsOff() {
 def logTrace(msg){ log.trace "${label()}: ${msg}" }
 
 def logInfo(msg) { 
-	if (infoLog) { log.info "${label()}: ${msg}" }
+	if (infoLog != false) { log.info "${label()}: ${msg}" }		//	unset counts as on
 }
 
 def debugLogOff() {

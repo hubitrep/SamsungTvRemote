@@ -20,8 +20,24 @@ def stPreferences() {
 	}
 }
 
+//	usable SmartThings link: enabled, configured, and the key not rejected
+def stConnected() {
+	return connectST && stApiKey?.trim() && stDeviceId?.trim() && !state.stAuthFailed
+}
+
+//	SmartThings personal access tokens created after 30 Dec 2024 expire after 24 hours
+def stAuthFailed() {
+	if (!state.stAuthFailed) {
+		state.stAuthFailed = true
+		unschedule("refresh")
+		logError("SmartThings rejected the API key (HTTP 401). Tokens created after 30 Dec 2024 " +
+				 "expire after 24 hours. SmartThings functions are off until a new key is saved.")
+	}
+}
+
 def stUpdate() {
 	def stData = [:]
+	state.remove("stAuthFailed")		//	a Save retries the key
 	if (connectST) {
 		stData << [connectST: "true"]
 		stData << [connectST: connectST]
@@ -77,6 +93,7 @@ def getDeviceList() {
 
 def getDeviceListParse(resp, data) {
 	def respData
+	if (resp.status == 401) { stAuthFailed() }
 	if (resp.status != 200) {
 		respData = [status: "ERROR",
 					httpCode: resp.status,
@@ -104,38 +121,49 @@ def getDeviceListParse(resp, data) {
 def deviceSetupParse(mainData) {
 	def setupData = [:]
 	
-	def pictureModes = mainData["custom.picturemode"].supportedPictureModes.value
+	def pictureModes = mainData["custom.picturemode"]?.supportedPictureModes?.value
 	state.pictureModes = pictureModes
 	setupData << [pictureModes: pictureModes]
 	
-	def soundModes =  mainData["custom.soundmode"].supportedSoundModes.value
+	def soundModes =  mainData["custom.soundmode"]?.supportedSoundModes?.value
 	state.soundModes = soundModes
 	setupData << [soundModes: soundModes]
 	
 	logInfo("deviceSetupParse: ${setupData}")
 }
 
+//	async: a slow cloud call must not hold the driver's only thread
 def deviceCommand(cmdData) {
 	logDebug("deviceCommand: $cmdData")
-	def respData = [:]
-	if (!stDeviceId || stDeviceId.trim() == "") {
-		respData << [status: "FAILED", data: "no stDeviceId"]
-	} else {
-		def sendData = [
-			path: "/devices/${stDeviceId.trim()}/commands",
-			cmdData: cmdData
-		]
-		respData = syncPost(sendData)
+	if (!stConnected()) {
+		logWarn("deviceCommand: [status: FAILED, data: SmartThings not connected, command: ${cmdData.command}]")
+		return
 	}
-	if (respData.status == "OK") {
-		if (cmdData.capability && cmdData.capability != "refresh") {
+	def cmdBody = [commands: [cmdData]]
+	def sendCmdParams = [
+		uri: "https://api.smartthings.com/v1",
+		path: "/devices/${stDeviceId.trim()}/commands",
+		headers: ['Authorization': 'Bearer ' + stApiKey.trim()],
+		requestContentType: "application/json",
+		contentType: "application/json",
+		body: new groovy.json.JsonBuilder(cmdBody).toString(),
+		timeout: 10
+	]
+	asynchttpPost("deviceCommandParse", sendCmdParams, [capability: cmdData.capability])
+}
+
+def deviceCommandParse(resp, data) {
+	if (resp.status == 200) {
+		if (data.capability && data.capability != "refresh") {
 			deviceRefresh()
 		} else {
 			poll()
 		}
-	}else {
-		logWarn("deviceCommand: [status: ${respData.status}, data: ${respData}]")
-		if (respData.toString().contains("Conflict")) {
+	} else if (resp.status == 401) {
+		stAuthFailed()
+	} else {
+		logWarn("deviceCommand: [status: FAILED, httpCode: ${resp.status}, capability: ${data.capability}]")
+		if (resp.status == 409) {
 			logWarn("<b>Conflict internal to SmartThings.  Device may be offline in SmartThings</b>")
 		}
 	}
@@ -195,75 +223,14 @@ private asyncGet(sendData, passData = "none") {
 		def sendCmdParams = [
 			uri: "https://api.smartthings.com/v1",
 			path: sendData.path,
-			headers: ['Authorization': 'Bearer ' + stApiKey.trim()]]
+			headers: ['Authorization': 'Bearer ' + stApiKey.trim()],
+			timeout: 10]
 		try {
 			asynchttpGet(sendData.parse, sendCmdParams, [reason: passData])
 		} catch (error) {
 			logWarn("asyncGet: [status: FAILED, errorMsg: ${error}]")
 		}
 	}
-}
-
-private syncGet(path){
-	def respData = [:]
-	if (!stApiKey || stApiKey.trim() == "") {
-		respData << [status: "FAILED",
-					 errorMsg: "No stApiKey"]
-	} else {
-		logDebug("syncGet: ${sendData}")
-		def sendCmdParams = [
-			uri: "https://api.smartthings.com/v1",
-			path: path,
-			headers: ['Authorization': 'Bearer ' + stApiKey.trim()]
-		]
-		try {
-			httpGet(sendCmdParams) {resp ->
-				if (resp.status == 200 && resp.data != null) {
-					respData << [status: "OK", results: resp.data]
-				} else {
-					respData << [status: "FAILED",
-								 httpCode: resp.status,
-								 errorMsg: resp.errorMessage]
-				}
-			}
-		} catch (error) {
-			respData << [status: "FAILED",
-						 errorMsg: error]
-		}
-	}
-	return respData
-}
-
-private syncPost(sendData){
-	def respData = [:]
-	if (!stApiKey || stApiKey.trim() == "") {
-		respData << [status: "FAILED",
-					 errorMsg: "No stApiKey"]
-	} else {
-		logDebug("syncPost: ${sendData}")
-		def cmdBody = [commands: [sendData.cmdData]]
-		def sendCmdParams = [
-			uri: "https://api.smartthings.com/v1",
-			path: sendData.path,
-			headers: ['Authorization': 'Bearer ' + stApiKey.trim()],
-			body : new groovy.json.JsonBuilder(cmdBody).toString()
-		]
-		try {
-			httpPost(sendCmdParams) {resp ->
-				if (resp.status == 200 && resp.data != null) {
-					respData << [status: "OK", results: resp.data.results]
-				} else {
-					respData << [status: "FAILED",
-								 httpCode: resp.status,
-								 errorMsg: resp.errorMessage]
-				}
-			}
-		} catch (error) {
-			respData << [status: "FAILED",
-						 errorMsg: error]
-		}
-	}
-	return respData
 }
 
 def distResp(resp, data) {
@@ -282,6 +249,8 @@ def distResp(resp, data) {
 						errorMsg: err,
 						respData: resp.data]
 		}
+	} else if (resp.status == 401) {
+		stAuthFailed()
 	} else {
 		resplog << [status: "ERROR",
 					httpCode: resp.status,

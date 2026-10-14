@@ -26,6 +26,7 @@ metadata {
 			   ){
 		capability "Refresh"
 		capability "Configuration"
+		capability "Initialize"
 		capability "SamsungTV"
 		command "showMessage", [[name: "Not Implemented"]]
 		capability "Switch"
@@ -70,11 +71,17 @@ def installed() {
 	runIn(1, updated)
 }
 
+//	called on hub start: the socket did not survive the reboot
+def initialize() {
+	close()
+}
+
 def updated() {
 	sendEvent(name: "numberOfButtons", value: "60")
 	unschedule()
 	close()
-	state.wsQueue = []
+	["wsQueue", "currentFunction", "pendingPowerHold", "powerProbeAt"].each { state.remove(it) }
+	sendEvent(name: "presetUpdateNext", value: "false")
 	def updStatus = [:]
 	if (!deviceIp) {
 		logWarn("\n\n\t\t<b>Enter the deviceIp and Save Preferences</b>\n\n")
@@ -147,13 +154,7 @@ def configure() {
 		updateDataValue("uuid", uuid)
 		respData << [status: "OK", dni: alternateWolMac, modelYear: modelYear,
 					 frameTv: frameTv, tokenSupport: tokenSupport]
-		sendEvent(name: "artModeStatus", value: "none")
-		if (frameTv == "true") {
-			def data = [request:"get_artmode_status",
-						id: "${getDataValue("uuid")}"]
-			data = JsonOutput.toJson(data)
-			artModeCmd(data)
-		}
+		sendEvent(name: "artModeStatus", value: "none")		//	getArtModeStatus (scheduled above) asks a Frame
 	} else {
 		respData << tvData
 	}
@@ -169,44 +170,59 @@ def onPoll() {
 		timeout: 6
 	]
 	asynchttpGet("onPollParse", sendCmdParams)
+	//	after a reboot the attribute still says open; the in-memory socket state does not
+	if (ws().phase == "closed" && device.currentValue("wsStatus") == "open") {
+		sendEvent(name: "wsStatus", value: "closed")
+	}
 	if (getDataValue("driverVersion") != driverVer()) {
 		updateDriver()
 	}
 }
 
 def updateDriver() {
-	logInfo("driver updated to ${driverVer()}")
+	logWarn("driver updated to ${driverVer()}")
 	//	version-specific state migrations go here (old version still in getDataValue("driverVersion"))
 	updateDataValue("driverVersion", driverVer())
 	runIn(1, updated)
 }
 
 def onPollParse(resp, data) {
-	def powerState
+	def powerState = "NC"
 	def onOff = "off"
+	Map info = null
 	if (resp.status == 200) {
-		powerState = new JsonSlurper().parseText(resp.data).device.PowerState
+		try {
+			info = new JsonSlurper().parseText(resp.data)?.device
+		} catch (e) {
+			logDebug([method: "onPollParse", error: "unparsable reply"])
+		}
+	}
+	if (info != null) {
+		powerState = info.PowerState
 		if (powerState == null) {
 			//	newer firmware omits PowerState; fall back to remote-socket liveness
 			powerState = "absent"
-			if (device.currentValue("wsStatus") == "open" && state.currentFunction == "remote") {
+			Map s = ws()
+			if (s.funct == "remote" && s.phase == "ready") {
 				onOff = "on"
+			} else if (s.funct == "frameArt" && s.phase != "closed") {
+				return		//	the art channel is in use; don't replace it to probe
 			} else if (!powerOffHeld()) {		//	a TV shutting down still accepts the socket
 				probePower()
 				return
 			}
 		}
-	} else {
-		powerState = "NC"
 	}
 	if (powerState == "on") { onOff = "on" }
 	setPowerState(onOff, [method: "onPollParse", httpStatus: resp.status, powerState: powerState])
 }
 
-//	open the remote socket; webSocketStatus reports the result to setPowerState
+//	open the remote socket; wsReady or a failure reports the result to setPowerState
 def probePower() {
-	if (state.powerProbeAt && now() - state.powerProbeAt < 20000) { return }
-	state.powerProbeAt = now()
+	Map s = ws()
+	if (s.probeAt && now() - s.probeAt < 20000) { return }
+	if (s.funct == "remote" && s.phase in ["connecting", "open"]) { return }
+	s.probeAt = now()
 	logDebug([method: "probePower"])
 	connect("remote")
 }
@@ -229,22 +245,30 @@ def setPowerState(onOff, Map logData) {
 		onOff = "off"
 	}
 	logData << [onOff: onOff]
-	if (device.currentValue("switch") != onOff) {
-		sendEvent(name: "switch", value: onOff)
+	String prev = device.currentValue("switch")
+	sendEvent(name: "switch", value: onOff)
+	if (prev != onOff) {
 		logData << [switch: onOff]
 		if (onOff == "on") {
-			runIn(5, setPowerOnMode)
+			//	startup display only after on(), not when a poll blip recovers
+			if (state.powerOnAt && now() - state.powerOnAt < 120000) {
+				runIn(5, setPowerOnMode)
+			}
+			runIn(5, refresh)
 		} else {
 			setPowerOffMode()
 		}
 	}
+	if (onOff == "on") { state.powerOnAt = null }
 	logDebug(logData)
 }
 
 //	===== Capability Switch =====
 def on() {
 	logInfo("on: [frameTv: ${getDataValue("frameTv")}]")
+	state.powerOnAt = now()
 	state.powerOffAt = null
+	state.lastWsFailure = null
 	//	WoL only: KEY_POWER is a toggle and can switch an on TV off
 	def wolMac = getDataValue("alternateWolMac")
 	def cmd = "FFFFFFFFFFFF$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac"
@@ -254,38 +278,46 @@ def on() {
 			hubitat.device.Protocol.LAN,
 			[type: hubitat.device.HubAction.Type.LAN_TYPE_UDPCLIENT,
 			 destinationAddress: dest,
-			 encoding: hubitat.device.HubAction.Encoding.HEX_STRING]))
+			 encoding: hubitat.device.HubAction.Encoding.HEX_STRING,
+			 ignoreResponse: true]))
 	}
-	runIn(1, onPoll)
+	//	the TV takes several seconds to boot
+	runIn(10, onPoll)
+	runIn(20, onPollAgain)
 }
+
+def onPollAgain() { onPoll() }
 
 def setPowerOnMode() {
 	logInfo("setPowerOnMode: [tvPwrOnMode: ${tvPwrOnMode}]")
 	if(tvPwrOnMode == "ART_MODE") {
 		getArtModeStatus()
-		pauseExecution(1000)
-		artMode()
+		runIn(2, artMode)		//	after the status reply
 	} else if (tvPwrOnMode == "Ambient") {
 		ambientMode()
 	}
-	runIn(5, refresh)
 }
 
 def off() {
 	logInfo("off: [frameTv: ${getDataValue("frameTv")}]")
 	state.powerOffAt = now()	//	post-off cooldown for onPollParse
+	state.powerOnAt = null
+	Map s = ws()
+	boolean ready = s.phase == "ready" && s.funct == "remote"
 	if (getDataValue("frameTv") == "true") {
 		//	Frame TV: short press = art mode, power-off needs a held press
-		if (device.currentValue("wsStatus") == "open") {
+		if (ready) {
 			powerHold()
 		} else {
-			state.pendingPowerHold = true
-			connect("remote")
+			if (s.funct != "remote" && s.phase != "closed") { close() }
+			s.holdAt = now()		//	wsReady starts the hold
+			if (s.phase == "closed") { connect("remote") }
 		}
 	} else {
 		sendKey("POWER")
+		//	an open socket outlives the TV and would read as on: close once the key is out
+		if (ready) { runIn(2, close) } else { ws().closeAfterSend = true }
 		runIn(1, onPoll)
-		runIn(3, close)		//	an open socket outlives the TV and would read as on
 	}
 }
 
@@ -314,7 +346,7 @@ def setVariable(valueString) {
 }
 
 def refresh() {
-	if (connectST) {
+	if (stConnected()) {
 		deviceRefresh()
 	}
 	runIn(4, updateTitle)

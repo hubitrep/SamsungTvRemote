@@ -25,6 +25,10 @@ def tvAppsPreferences() {
 
 def appOpenByName(appName) {
 	def logData = [method: "appOpenByName"]
+	if (!appName || !state.appData) {
+		logWarn([method: "appOpenByName", error: "no app name or no app list"])
+		return
+	}
 	def thisApp = state.appData.find { it.key.toLowerCase().contains(appName.toLowerCase()) }
 	if (thisApp != null) {
 		def appId = thisApp.value
@@ -35,7 +39,7 @@ def appOpenByName(appName) {
 			httpPost(uri, "") { resp ->
 				logData << [status: resp.statusLine, data: resp.data, success: resp.success]
 				if (resp.status == 200) {
-					if (connectST) { runIn(10, deviceRefresh) }
+					if (stConnected()) { runIn(10, deviceRefresh) }
 					sendEvent(name: "appName", value: appName)
 					sendEvent(name: "appId", value: appId)
 					logDebug(logData)
@@ -60,7 +64,7 @@ def appClose(appId = device.currentValue("appId")) {
 		logData << [status: "appId is null", action: "try exit()"]
 		sendEvent(name: "appName", value: " ")
 		sendEvent(name: "appId", value: " ")
-		if (connectST) { runIn(5, deviceRefresh) }
+		if (stConnected()) { runIn(5, deviceRefresh) }
 	} else {
 		logData << [status: "sending appClose"]
 		Map params = [uri: "http://${deviceIp}:8001/api/v2/applications/${appId}",
@@ -81,7 +85,7 @@ def appCloseParse(resp, data) {
 		exit()
 		logWarn(logData)
 	}
-	if (connectST) { runIn(5, deviceRefresh) }
+	if (stConnected()) { runIn(5, deviceRefresh) }
 	sendEvent(name: "appName", value: " ")
 	sendEvent(name: "appId", value: " ")
 }
@@ -95,7 +99,6 @@ def updateAppCodes() {
 			state.appData = [:]
 			logData << [appData: "reset"]
 		}
-		unschedule("onPoll")
 		state.appsInstalled = []
 		def appIds = appIdList()
 		def appId = 0
@@ -128,7 +131,6 @@ def getAppData(appId = 0) {
 		}
 		logDebug(logData)
 	} else {
-		runIn(5, setOnPollInterval)
 		logData << [status: "Done finding", totalApps: state.appData.size(), appsInstalled: state.appsInstalled]
 		state.remove("appsInstalled")
 		state.remove("retry")
@@ -138,8 +140,11 @@ def getAppData(appId = 0) {
 
 def parseGetAppData(resp, data) {
 	Map logData = [method: "parseGetAppData", data: data, status: resp.status]
+	def respData = null
 	if (resp.status == 200) {
-		def respData = new JsonSlurper().parseText(resp.data)
+		try { respData = new JsonSlurper().parseText(resp.data) } catch (e) { }
+	}
+	if (respData?.name && respData?.id) {
 		String name = shortenName(respData.name)
 		logData << [name: name, status: "appAdded"]
 		state.appData << ["${name}": respData.id]
@@ -155,7 +160,7 @@ def parseGetAppData(resp, data) {
 	} else {
 		logData << [retry: state.retry, status: "appNotAdded",
 					reason: "invalid response from device"]
-		if (state.retry == false) {
+		if (!state.retry) {
 			logData << [action: "<b>RETRYING</b>"]
 			state.retry = true
 			runIn(5, getAppData, [data: data.appId])
@@ -167,6 +172,7 @@ def parseGetAppData(resp, data) {
 }
 
 def shortenName(name) {
+	if (name == null) { return " " }
 	if (name.contains(" - ")) {
 		name = name.substring(0, name.indexOf(" - "))
 	} else if (name.contains(" by ")) {
@@ -215,7 +221,7 @@ def appIdList() {
 		"111299001912", "111299000769", "111012010001", "11101200001", "11101000407",
 		"11091000000"
 	]
-	return appList
+	return appList.unique()
 }
 
 def updateAppName(tvName = device.currentValue("tvChannelName")) {
@@ -251,7 +257,7 @@ def updateAppName(tvName = device.currentValue("tvChannelName")) {
 		}catch (err) {
 			logData << [error: err]
 		}
-		if (appId != "") {
+		if (appId?.trim() && appName?.trim()) {
 			state.appData << ["${appName}": appId]
 			logData << [appData: ["${appName}": appId]]
 		}

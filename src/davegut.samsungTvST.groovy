@@ -18,7 +18,7 @@ command "setLevel", ["SmartThings Function"]
 attribute "level", "NUMBER"
 
 def deviceRefresh() {
-	if (connectST && stApiKey!= null) {
+	if (stConnected()) {
 		def cmdData = [
 			component: "main",
 			capability: "refresh",
@@ -55,6 +55,10 @@ def setVolume(volume) {
 def togglePictureMode() {
 	//	requires state.pictureModes
 	def pictureModes = state.pictureModes
+	if (!pictureModes) {
+		logWarn("togglePictureMode: no picture modes from SmartThings")
+		return
+	}
 	def totalModes = pictureModes.size()
 	def currentMode = device.currentValue("pictureMode")
 	def modeNo = pictureModes.indexOf(currentMode)
@@ -75,6 +79,10 @@ def setPictureMode(pictureMode) {
 
 def toggleSoundMode() {
 	def soundModes = state.soundModes
+	if (!soundModes) {
+		logWarn("toggleSoundMode: no sound modes from SmartThings")
+		return
+	}
 	def totalModes = soundModes.size()
 	def currentMode = device.currentValue("soundMode")
 	def modeNo = soundModes.indexOf(currentMode)
@@ -102,6 +110,15 @@ def sourceSetST(inputSource) {
 		capability: "mediaInputSource",
 		command: "setInputSource",
 		arguments: [inputSource]]
+	deviceCommand(cmdData)
+}
+
+def setMuteST(muteCmd) {
+	def cmdData = [
+		component: "main",
+		capability: "audioMute",
+		command: muteCmd,
+		arguments: []]
 	deviceCommand(cmdData)
 }
 

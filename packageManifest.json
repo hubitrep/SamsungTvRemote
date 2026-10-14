@@ -1,12 +1,12 @@
 {
   "packageName": "Samsung TV Remote (hubitrep)",
   "author": "hubitrep (original by David Gutheinz)",
-  "version": "2.3.10",
+  "version": "2.4.0",
   "minimumHEVersion": "2.3.9",
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
   "communityLink": "https://community.hubitat.com/t/samsung-hubitat-tv-integration-2016-and-later/55120",
-  "dateReleased": "2026-10-13",
-  "releaseNotes": "Maintained fork of Dave Gutheinz's Samsung TV Remote 2.3.9b. Power state works on TV firmware that no longer reports PowerState; reliable power on and off; key sends no longer dropped. Full list in the README. After updating, open the device page and click Save Preferences.",
+  "dateReleased": "2026-10-14",
+  "releaseNotes": "Websocket handling reworked: keys wait for the TV's confirmation, one connection per burst, no stale keys after a reboot or a failed power-off. Power state without PowerState waits for the TV to confirm. Presets and art mode no longer pause the driver. SmartThings commands are async and an expired key is reported once. Full list in the README.",
   "drivers": [
     {
       "id": "70c694f2-d2cb-4c00-9357-28376f9c794f",

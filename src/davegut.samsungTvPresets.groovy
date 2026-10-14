@@ -34,8 +34,16 @@ def undoUpdate() { sendEvent(name: "presetUpdateNext", value: "false") }
 def presetCreate(presetNumber) {
 	//	Called from Hubitat Device's page for TV or from presetExecute
 	//	when state.updateNextPreset is true
-	refresh()
-	pauseExecution(2000)
+	if (stConnected()) {
+		refresh()
+		runIn(3, presetCreateRead, [data: [presetNumber: presetNumber]])		//	after the status reply
+	} else {
+		presetCreateRead([presetNumber: presetNumber])
+	}
+}
+
+def presetCreateRead(data) {
+	def presetNumber = data.presetNumber
 	Map logData = [method: "presetCreate", presetNumber: presetNumber]
 	String appName = device.currentValue("appName")
 	String tvChannel = device.currentValue("tvChannel")
@@ -80,6 +88,14 @@ def presetDataUpdate(presetNumber, thisPresetData) {
 	state.presetData = presetData
 }
 
+def presetChannelSet(data) {
+	channelSet(data.tvChannel)
+	sendEvent(name: "appId", value: " ")
+	sendEvent(name: "appName", value: " ")
+	sendEvent(name: "tvChannel", value: data.tvChannel)
+	sendEvent(name: "tvChannelName", value: data.tvChannelName)
+}
+
 def presetExecute(presetNumber) {
 	Map logData = [method: "presetExecute", presetNumber: presetNumber]
 	if (device.currentValue("presetUpdateNext") == "true") {
@@ -105,16 +121,14 @@ def presetExecute(presetNumber) {
 				logData << [appName: execute, appId: thisPreset.value.appId]
 			} else if (presetType == "tvChannel") {
 				//	Close running app the update channel
-				if (!connectST && device.currentValue("appId") != " ") {
+				Map chData = [tvChannel: execute, tvChannelName: thisPreset.value.tvChannelName]
+				if (!stConnected() && device.currentValue("appId") != " ") {
 					appClose()
-					pauseExecution(7000)
+					runIn(7, presetChannelSet, [data: chData])		//	after the app closes
+				} else {
+					presetChannelSet(chData)
 				}
-				channelSet(execute)
-				sendEvent(name: "appId", value: " ")
-				sendEvent(name: "appName", value: " ")
-				sendEvent(name: "tvChannel", value: execute)
-				sendEvent(name: "tvChannelName", value: thisPreset.value.tvChannelName)
-				logData << [tvChannel: execute, tvChannelName: thisPreset.value.tvChannelName]
+				logData << chData
 			} else {
 				logData << [error: "invalid preset type"]
 				logWarn(logData)

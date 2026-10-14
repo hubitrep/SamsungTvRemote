@@ -31,6 +31,35 @@ After updating, open each TV device and click Save Preferences.
 
 ## Changes
 
+### 2.4.0
+
+- The socket counts as ready when the TV sends `ms.channel.connect`, not when the connection opens.
+  Keys queued before that are sent then; a burst of keys opens one connection, not one per key.
+  Keys queued more than 15 s earlier are dropped instead of sent late.
+- Power detection without `PowerState` waits for that confirmation too, and treats
+  `ms.channel.timeOut` as asleep, as both Home Assistant integrations do.
+- Socket state is kept in memory, so after a hub reboot or code update the driver no longer
+  believes a socket is still open. New `Initialize` capability resets it at hub start.
+- Power-off: the regular-TV socket closes only after the POWER key is out; the Frame held press
+  starts once the socket is ready. A power-off that never reached the TV no longer fires later.
+- The TV Startup Display mode runs only after the `on` command, not when the switch comes back on
+  after a missed poll.
+- `on` clears an earlier socket failure and checks the TV 10 s and 20 s later.
+- The Wake-on-LAN packets no longer wait 10 s for a reply that never comes, which queued later
+  hub commands from the device behind them.
+- The switch event is sent on every poll, so the device's last activity stays current.
+- Presets, fast forward/back and art mode at power-on no longer pause the driver; their steps are
+  scheduled instead, so they act on the TV's reply rather than on the values from before.
+- The app-code scan no longer stops power polling, and a bad reply no longer ends the scan.
+- `mute` and `unmute` set the state instead of toggling it.
+- SmartThings: commands no longer block the driver. An expired key (HTTP 401) is reported once and
+  SmartThings polling stops until a new key is saved; channel changes then fall back to remote keys.
+- Frame TVs: `artMode` and `artModeStatus` are always declared, and the art channel connects
+  without the token, which 2024+ Frames reject.
+- Info logging defaults to on when the preference has never been saved.
+
+The Frame and SmartThings changes are untested on hardware.
+
 ### 2.3.10
 
 - Power state works on TV firmware that no longer reports `PowerState` in `/api/v2/`: the driver
