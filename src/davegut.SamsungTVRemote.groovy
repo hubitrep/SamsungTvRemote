@@ -153,10 +153,7 @@ def configure() {
 		}
 		def uuid = tvData.device.duid.substring(5)
 		updateDataValue("uuid", uuid)
-		//	for support: what the TV is and what its REST reply carries
-		if (tvData.device.modelName) { updateDataValue("modelName", tvData.device.modelName) }
-		if (tvData.device.model) { updateDataValue("platform", tvData.device.model) }
-		if (tvData.version) { updateDataValue("apiVersion", tvData.version) }
+		saveTvInfo(tvData)
 		updateDataValue("powerStateReported", (tvData.device.PowerState != null).toString())
 		respData << [status: "OK", dni: alternateWolMac, modelYear: modelYear,
 					 frameTv: frameTv, tokenSupport: tokenSupport]
@@ -167,6 +164,13 @@ def configure() {
 	runIn(1, stUpdate)
 	logInfo("configure: ${respData}")
 	return respData
+}
+
+//	for support: what the TV is and which REST API it serves
+def saveTvInfo(Map reply) {
+	if (reply.device?.modelName) { updateDataValue("modelName", reply.device.modelName) }
+	if (reply.device?.model) { updateDataValue("platform", reply.device.model) }
+	if (reply.version) { updateDataValue("apiVersion", reply.version) }
 }
 
 //	===== Polling/Refresh Capability =====
@@ -198,7 +202,10 @@ def onPollParse(resp, data) {
 	Map info = null
 	if (resp.status == 200) {
 		try {
-			info = new JsonSlurper().parseText(resp.data)?.device
+			Map reply = new JsonSlurper().parseText(resp.data)
+			info = reply?.device
+			//	a device set up or updated while the TV was off has none yet
+			if (info && !getDataValue("modelName")) { saveTvInfo(reply) }
 		} catch (e) {
 			logDebug([method: "onPollParse", error: "unparsable reply"])
 		}
