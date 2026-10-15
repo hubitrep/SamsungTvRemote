@@ -36,8 +36,9 @@ def appOpenByName(appName) {
 		logData << [appName: appName, appId: appId]
 		def uri = "http://${deviceIp}:8001/api/v2/applications/${appId}"
 		try {
-			httpPost(uri, "") { resp ->
-				logData << [status: resp.statusLine, data: resp.data, success: resp.success]
+			//	the TV answers a bare true (rejected by the default JSON parser) after about 6 s
+			httpPost([uri: uri, body: "", textParser: true, timeout: 15]) { resp ->
+				logData << [status: resp.status, data: resp.data?.text?.trim(), success: resp.success]
 				if (resp.status == 200) {
 					if (stConnected()) { runIn(10, deviceRefresh) }
 					sendEvent(name: "appName", value: appName)
@@ -47,7 +48,6 @@ def appOpenByName(appName) {
 					logWarn(logData)
 				}
 			}
-			logDebug(logData)
 		} catch (err) {
 			logData << [status: "httpPost error", data: err]
 			logWarn(logData)
@@ -225,13 +225,13 @@ def appIdList() {
 }
 
 def updateAppName(tvName = device.currentValue("tvChannelName")) {
-	//	If the tvChannel is blank, the the name may reflect the appId
+	//	If the tvChannel is blank, the name may reflect the appId
 	//	that is used by the device.  Thanks SmartThings.
 	String appId = " "
 	String appName = " "
 	Map logData = [method: "updateAppName", tvName: tvName]
 	//	There are some names that need translation based on known
-	//	idiosyncracies with the SmartThings implementation.
+	//	idiosyncrasies with the SmartThings implementation.
 	//	Go to translation table and if the translation exists,
 	//	set the appName to that value.
 	def tempName = transTable().find { it.key == tvName }

@@ -41,7 +41,7 @@ def flatten():
 def bundle():
     """install.txt/update.txt list the namespace, bundle name, then each file by type."""
     libs = [f"davegut.{n}.groovy" for n in ("Logging", "samsungTvApps", "samsungTvWebsocket",
-            "samsungTvST", "SmartThingsInterface", "samsungTvPresets", "samsungTvTEST")]
+            "samsungTvST", "SmartThingsInterface", "samsungTvPresets")]
     listing = "\n".join(["davegut", BUNDLE_NAME] + [f"library {f}" for f in libs]
                         + [f"driver {CORE}"])
     with zipfile.ZipFile(BUNDLE, "w", zipfile.ZIP_DEFLATED) as z:

@@ -60,7 +60,7 @@ def presetCreateRead(data) {
 }
 
 def presetCreateApp(presetNumber, appName, appId) {
-	Map logData = [method: "appPresetCreate", presetNumber: presetNumber,
+	Map logData = [method: "presetCreateApp", presetNumber: presetNumber,
 				   appName: appName, appId: appId]
 	Map thisPresetData = [type: "application", execute: appName, appId: appId]
 	logData << [thisPresetData: thisPresetData, status: "updating, check state to confirm"]
@@ -69,7 +69,7 @@ def presetCreateApp(presetNumber, appName, appId) {
 }
 
 def presetCreateTv(presetNumber, tvChannel, tvChannelName) {
-	Map logData = [method: "resetCreateTv", presetNumber: presetNumber, 
+	Map logData = [method: "presetCreateTv", presetNumber: presetNumber, 
 				   tvChannel: tvChannel, tvChannelName: tvChannelName]
 	Map thisPresetData = [type: "tvChannel", execute: tvChannel, tvChannelName: tvChannelName]
 	logData << [thisPresetData: thisPresetData, status: "updating, check state to confirm"]
@@ -113,14 +113,12 @@ def presetExecute(presetNumber) {
 			def presetType = thisPreset.value.type
 			if (presetType == "application") {
 				//	Simply open the app.
-				appOpenByName(execute)
-				sendEvent(name: "appId", value: thisPreset.value.appId)
-				sendEvent(name: "appName", value: execute)
+				appOpenByName(execute)		//	sets appId and appName when the launch works
 				sendEvent(name: "tvChannel", value: " ")
 				sendEvent(name: "tvChannelName", value: " ")
 				logData << [appName: execute, appId: thisPreset.value.appId]
 			} else if (presetType == "tvChannel") {
-				//	Close running app the update channel
+				//	Close the running app, then change the channel
 				Map chData = [tvChannel: execute, tvChannelName: thisPreset.value.tvChannelName]
 				if (!stConnected() && device.currentValue("appId") != " ") {
 					appClose()

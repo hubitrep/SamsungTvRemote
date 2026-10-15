@@ -74,10 +74,10 @@ def installed() {
 //	called on hub start: the socket did not survive the reboot
 def initialize() {
 	close()
+	checkDriverVersion()
 }
 
 def updated() {
-	sendEvent(name: "numberOfButtons", value: "60")
 	unschedule()
 	close()
 	["wsQueue", "currentFunction", "pendingPowerHold", "powerProbeAt",
@@ -97,7 +97,7 @@ def updated() {
 		updStatus << [setOnPollInterval: setOnPollInterval()]
 		sendEvent(name: "numberOfButtons", value: 60)
 		sendEvent(name: "wsStatus", value: "closed")
-		def action = configure()
+		configure()
 		if (!state.appData) { state.appData = [:] }
 		updStatus << [updApps: updateAppCodes()]
 	}
@@ -105,16 +105,17 @@ def updated() {
 }
 
 def setOnPollInterval() {
-	if (pollInterval == null) {
-		pollInterval = "60"
+	String interval = pollInterval
+	if (interval == null) {
+		interval = "60"
 		device.updateSetting("pollInterval", [type:"enum", value: "60"])
 	}
-	if (pollInterval == "60") {
+	if (interval == "60") {
 		runEvery1Minute(onPoll)
-	} else if (pollInterval != "off") {
-		schedule("0/${pollInterval} * * * * ?",  onPoll)
+	} else if (interval != "off") {
+		schedule("0/${interval} * * * * ?",  onPoll)
 	}
-	return pollInterval
+	return interval
 }
 
 def configure() {
@@ -129,6 +130,7 @@ def configure() {
 		tvData << [status: "error", data: error]
 		if (getDataValue("alternateWolMac")) {
 			tvData << [action: "kept saved TV settings"]
+			logWarn("configure: no reply from ${deviceIp}. Kept the saved TV settings; if the TV is on, check the IP address.")
 		} else {
 			logError("configure: TV Off during setup or Invalid IP address.\n\t\tTurn TV On and Run CONFIGURE or Save Preferences!")
 		}
@@ -139,7 +141,11 @@ def configure() {
 		updateDataValue("deviceMac", wifiMac)
 		def alternateWolMac = wifiMac.replaceAll(":", "").toUpperCase()
 		updateDataValue("alternateWolMac", alternateWolMac)
-		device.setDeviceNetworkId(alternateWolMac)
+		try {
+			device.setDeviceNetworkId(alternateWolMac)
+		} catch (e) {
+			logWarn("configure: [setDeviceNetworkId: ${alternateWolMac}, error: ${e}]")
+		}
 		def modelYear = "20" + tvData.device.model[0..1]
 		updateDataValue("modelYear", modelYear)
 		def frameTv = "false"
@@ -184,6 +190,11 @@ def onPoll() {
 	if (ws().phase == "closed" && device.currentValue("wsStatus") == "open") {
 		sendEvent(name: "wsStatus", value: "closed")
 	}
+	checkDriverVersion()
+}
+
+//	a code push doesn't run updated(); catch it at the next poll, refresh or hub start
+def checkDriverVersion() {
 	if (getDataValue("driverVersion") != driverVer()) {
 		updateDriver()
 	}
@@ -268,6 +279,7 @@ def setPowerState(onOff, Map logData) {
 	sendEvent(name: "switch", value: onOff)
 	if (prev != onOff) {
 		logData << [switch: onOff]
+		logInfo("setPowerState: [switch: ${onOff}]")
 		if (onOff == "on") {
 			//	startup display only after on(), not when a poll blip recovers
 			if (state.powerOnAt && now() - state.powerOnAt < 120000) {
@@ -289,6 +301,15 @@ def on() {
 	state.powerOffAt = null
 	state.lastWsFailure = null
 	//	WoL only: KEY_POWER is a toggle and can switch an on TV off
+	sendWol()
+	//	the TV takes several seconds to boot; WoL over Wi-Fi is often missed, so resend
+	runIn(10, onPollWol)
+	runIn(20, onPollAgain)
+	//	after the 10 s poll has answered or timed out (6 s)
+	if (stConnected()) { runIn(17, stPowerOn) }
+}
+
+def sendWol() {
 	def wolMac = getDataValue("alternateWolMac")
 	def cmd = "FFFFFFFFFFFF$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac"
 	//	send to both WoL ports (9 and 7)
@@ -300,12 +321,24 @@ def on() {
 			 encoding: hubitat.device.HubAction.Encoding.HEX_STRING,
 			 ignoreResponse: true]))
 	}
-	//	the TV takes several seconds to boot
-	runIn(10, onPoll)
-	runIn(20, onPollAgain)
 }
 
-def onPollAgain() { onPoll() }
+def onPollWol() { resendWol(); onPoll() }
+def onPollAgain() { resendWol(); onPoll() }
+
+def resendWol() {
+	if (!state.powerOnAt) { return }		//	cleared once the TV is seen on, or by off()
+	logDebug([method: "resendWol", secs: (now() - state.powerOnAt) / 1000])
+	sendWol()
+}
+
+//	Wake-on-LAN missed; SmartThings can often still wake the TV
+def stPowerOn() {
+	if (!state.powerOnAt) { return }
+	logInfo("stPowerOn: [reason: no answer to Wake-on-LAN]")
+	deviceCommand([component: "main", capability: "switch", command: "on", arguments: []])
+	runIn(5, onPoll)
+}
 
 def setPowerOnMode() {
 	logInfo("setPowerOnMode: [tvPwrOnMode: ${tvPwrOnMode}]")
@@ -352,7 +385,7 @@ def powerHoldRelease() {
 }
 
 def setPowerOffMode() {
-	logInfo("setPowerOfMode")
+	logInfo("setPowerOffMode")
 	sendEvent(name: "appId", value: " ")
 	sendEvent(name: "appName", value: " ")
 	sendEvent(name: "tvChannel", value: " ")
@@ -365,6 +398,7 @@ def setVariable(valueString) {
 }
 
 def refresh() {
+	checkDriverVersion()
 	if (stConnected()) {
 		deviceRefresh()
 	}
@@ -478,7 +512,6 @@ def push(pushed) {
 }
 
 //	===== Libraries =====
-//#include davegut.samsungTvTEST
 
 // ~~~~~ start include (1) davegut.samsungTvWebsocket ~~~~~
 library ( // library marker davegut.samsungTvWebsocket, line 1
@@ -1007,18 +1040,18 @@ def appOpenByName(appName) { // library marker davegut.samsungTvApps, line 26
 		logData << [appName: appName, appId: appId] // library marker davegut.samsungTvApps, line 36
 		def uri = "http://${deviceIp}:8001/api/v2/applications/${appId}" // library marker davegut.samsungTvApps, line 37
 		try { // library marker davegut.samsungTvApps, line 38
-			httpPost(uri, "") { resp -> // library marker davegut.samsungTvApps, line 39
-				logData << [status: resp.statusLine, data: resp.data, success: resp.success] // library marker davegut.samsungTvApps, line 40
-				if (resp.status == 200) { // library marker davegut.samsungTvApps, line 41
-					if (stConnected()) { runIn(10, deviceRefresh) } // library marker davegut.samsungTvApps, line 42
-					sendEvent(name: "appName", value: appName) // library marker davegut.samsungTvApps, line 43
-					sendEvent(name: "appId", value: appId) // library marker davegut.samsungTvApps, line 44
-					logDebug(logData) // library marker davegut.samsungTvApps, line 45
-				} else { // library marker davegut.samsungTvApps, line 46
-					logWarn(logData) // library marker davegut.samsungTvApps, line 47
-				} // library marker davegut.samsungTvApps, line 48
-			} // library marker davegut.samsungTvApps, line 49
-			logDebug(logData) // library marker davegut.samsungTvApps, line 50
+			//	the TV answers a bare true (rejected by the default JSON parser) after about 6 s // library marker davegut.samsungTvApps, line 39
+			httpPost([uri: uri, body: "", textParser: true, timeout: 15]) { resp -> // library marker davegut.samsungTvApps, line 40
+				logData << [status: resp.status, data: resp.data?.text?.trim(), success: resp.success] // library marker davegut.samsungTvApps, line 41
+				if (resp.status == 200) { // library marker davegut.samsungTvApps, line 42
+					if (stConnected()) { runIn(10, deviceRefresh) } // library marker davegut.samsungTvApps, line 43
+					sendEvent(name: "appName", value: appName) // library marker davegut.samsungTvApps, line 44
+					sendEvent(name: "appId", value: appId) // library marker davegut.samsungTvApps, line 45
+					logDebug(logData) // library marker davegut.samsungTvApps, line 46
+				} else { // library marker davegut.samsungTvApps, line 47
+					logWarn(logData) // library marker davegut.samsungTvApps, line 48
+				} // library marker davegut.samsungTvApps, line 49
+			} // library marker davegut.samsungTvApps, line 50
 		} catch (err) { // library marker davegut.samsungTvApps, line 51
 			logData << [status: "httpPost error", data: err] // library marker davegut.samsungTvApps, line 52
 			logWarn(logData) // library marker davegut.samsungTvApps, line 53
@@ -1196,13 +1229,13 @@ def appIdList() { // library marker davegut.samsungTvApps, line 188
 } // library marker davegut.samsungTvApps, line 225
  // library marker davegut.samsungTvApps, line 226
 def updateAppName(tvName = device.currentValue("tvChannelName")) { // library marker davegut.samsungTvApps, line 227
-	//	If the tvChannel is blank, the the name may reflect the appId // library marker davegut.samsungTvApps, line 228
+	//	If the tvChannel is blank, the name may reflect the appId // library marker davegut.samsungTvApps, line 228
 	//	that is used by the device.  Thanks SmartThings. // library marker davegut.samsungTvApps, line 229
 	String appId = " " // library marker davegut.samsungTvApps, line 230
 	String appName = " " // library marker davegut.samsungTvApps, line 231
 	Map logData = [method: "updateAppName", tvName: tvName] // library marker davegut.samsungTvApps, line 232
 	//	There are some names that need translation based on known // library marker davegut.samsungTvApps, line 233
-	//	idiosyncracies with the SmartThings implementation. // library marker davegut.samsungTvApps, line 234
+	//	idiosyncrasies with the SmartThings implementation. // library marker davegut.samsungTvApps, line 234
 	//	Go to translation table and if the translation exists, // library marker davegut.samsungTvApps, line 235
 	//	set the appName to that value. // library marker davegut.samsungTvApps, line 236
 	def tempName = transTable().find { it.key == tvName } // library marker davegut.samsungTvApps, line 237
@@ -1322,7 +1355,7 @@ def presetCreateRead(data) { // library marker davegut.samsungTvPresets, line 45
 } // library marker davegut.samsungTvPresets, line 60
  // library marker davegut.samsungTvPresets, line 61
 def presetCreateApp(presetNumber, appName, appId) { // library marker davegut.samsungTvPresets, line 62
-	Map logData = [method: "appPresetCreate", presetNumber: presetNumber, // library marker davegut.samsungTvPresets, line 63
+	Map logData = [method: "presetCreateApp", presetNumber: presetNumber, // library marker davegut.samsungTvPresets, line 63
 				   appName: appName, appId: appId] // library marker davegut.samsungTvPresets, line 64
 	Map thisPresetData = [type: "application", execute: appName, appId: appId] // library marker davegut.samsungTvPresets, line 65
 	logData << [thisPresetData: thisPresetData, status: "updating, check state to confirm"] // library marker davegut.samsungTvPresets, line 66
@@ -1331,7 +1364,7 @@ def presetCreateApp(presetNumber, appName, appId) { // library marker davegut.sa
 } // library marker davegut.samsungTvPresets, line 69
  // library marker davegut.samsungTvPresets, line 70
 def presetCreateTv(presetNumber, tvChannel, tvChannelName) { // library marker davegut.samsungTvPresets, line 71
-	Map logData = [method: "resetCreateTv", presetNumber: presetNumber,  // library marker davegut.samsungTvPresets, line 72
+	Map logData = [method: "presetCreateTv", presetNumber: presetNumber,  // library marker davegut.samsungTvPresets, line 72
 				   tvChannel: tvChannel, tvChannelName: tvChannelName] // library marker davegut.samsungTvPresets, line 73
 	Map thisPresetData = [type: "tvChannel", execute: tvChannel, tvChannelName: tvChannelName] // library marker davegut.samsungTvPresets, line 74
 	logData << [thisPresetData: thisPresetData, status: "updating, check state to confirm"] // library marker davegut.samsungTvPresets, line 75
@@ -1375,32 +1408,30 @@ def presetExecute(presetNumber) { // library marker davegut.samsungTvPresets, li
 			def presetType = thisPreset.value.type // library marker davegut.samsungTvPresets, line 113
 			if (presetType == "application") { // library marker davegut.samsungTvPresets, line 114
 				//	Simply open the app. // library marker davegut.samsungTvPresets, line 115
-				appOpenByName(execute) // library marker davegut.samsungTvPresets, line 116
-				sendEvent(name: "appId", value: thisPreset.value.appId) // library marker davegut.samsungTvPresets, line 117
-				sendEvent(name: "appName", value: execute) // library marker davegut.samsungTvPresets, line 118
-				sendEvent(name: "tvChannel", value: " ") // library marker davegut.samsungTvPresets, line 119
-				sendEvent(name: "tvChannelName", value: " ") // library marker davegut.samsungTvPresets, line 120
-				logData << [appName: execute, appId: thisPreset.value.appId] // library marker davegut.samsungTvPresets, line 121
-			} else if (presetType == "tvChannel") { // library marker davegut.samsungTvPresets, line 122
-				//	Close running app the update channel // library marker davegut.samsungTvPresets, line 123
-				Map chData = [tvChannel: execute, tvChannelName: thisPreset.value.tvChannelName] // library marker davegut.samsungTvPresets, line 124
-				if (!stConnected() && device.currentValue("appId") != " ") { // library marker davegut.samsungTvPresets, line 125
-					appClose() // library marker davegut.samsungTvPresets, line 126
-					runIn(7, presetChannelSet, [data: chData])		//	after the app closes // library marker davegut.samsungTvPresets, line 127
-				} else { // library marker davegut.samsungTvPresets, line 128
-					presetChannelSet(chData) // library marker davegut.samsungTvPresets, line 129
-				} // library marker davegut.samsungTvPresets, line 130
-				logData << chData // library marker davegut.samsungTvPresets, line 131
-			} else { // library marker davegut.samsungTvPresets, line 132
-				logData << [error: "invalid preset type"] // library marker davegut.samsungTvPresets, line 133
-				logWarn(logData) // library marker davegut.samsungTvPresets, line 134
-			} // library marker davegut.samsungTvPresets, line 135
-		} // library marker davegut.samsungTvPresets, line 136
-		runIn(2, updateTitle) // library marker davegut.samsungTvPresets, line 137
-	} // library marker davegut.samsungTvPresets, line 138
-	logDebug(logData) // library marker davegut.samsungTvPresets, line 139
-} // library marker davegut.samsungTvPresets, line 140
- // library marker davegut.samsungTvPresets, line 141
+				appOpenByName(execute)		//	sets appId and appName when the launch works // library marker davegut.samsungTvPresets, line 116
+				sendEvent(name: "tvChannel", value: " ") // library marker davegut.samsungTvPresets, line 117
+				sendEvent(name: "tvChannelName", value: " ") // library marker davegut.samsungTvPresets, line 118
+				logData << [appName: execute, appId: thisPreset.value.appId] // library marker davegut.samsungTvPresets, line 119
+			} else if (presetType == "tvChannel") { // library marker davegut.samsungTvPresets, line 120
+				//	Close the running app, then change the channel // library marker davegut.samsungTvPresets, line 121
+				Map chData = [tvChannel: execute, tvChannelName: thisPreset.value.tvChannelName] // library marker davegut.samsungTvPresets, line 122
+				if (!stConnected() && device.currentValue("appId") != " ") { // library marker davegut.samsungTvPresets, line 123
+					appClose() // library marker davegut.samsungTvPresets, line 124
+					runIn(7, presetChannelSet, [data: chData])		//	after the app closes // library marker davegut.samsungTvPresets, line 125
+				} else { // library marker davegut.samsungTvPresets, line 126
+					presetChannelSet(chData) // library marker davegut.samsungTvPresets, line 127
+				} // library marker davegut.samsungTvPresets, line 128
+				logData << chData // library marker davegut.samsungTvPresets, line 129
+			} else { // library marker davegut.samsungTvPresets, line 130
+				logData << [error: "invalid preset type"] // library marker davegut.samsungTvPresets, line 131
+				logWarn(logData) // library marker davegut.samsungTvPresets, line 132
+			} // library marker davegut.samsungTvPresets, line 133
+		} // library marker davegut.samsungTvPresets, line 134
+		runIn(2, updateTitle) // library marker davegut.samsungTvPresets, line 135
+	} // library marker davegut.samsungTvPresets, line 136
+	logDebug(logData) // library marker davegut.samsungTvPresets, line 137
+} // library marker davegut.samsungTvPresets, line 138
+ // library marker davegut.samsungTvPresets, line 139
 // ~~~~~ end include (3) davegut.samsungTvPresets ~~~~~
 // ~~~~~ start include (4) davegut.SmartThingsInterface ~~~~~
 library ( // library marker davegut.SmartThingsInterface, line 1
@@ -1444,227 +1475,228 @@ def stUpdate() { // library marker davegut.SmartThingsInterface, line 38
 	def stData = [:] // library marker davegut.SmartThingsInterface, line 39
 	state.remove("stAuthFailed")		//	a Save retries the key // library marker davegut.SmartThingsInterface, line 40
 	if (connectST) { // library marker davegut.SmartThingsInterface, line 41
-		stData << [connectST: "true"] // library marker davegut.SmartThingsInterface, line 42
-		stData << [connectST: connectST] // library marker davegut.SmartThingsInterface, line 43
-		if (!stApiKey || stApiKey == "") { // library marker davegut.SmartThingsInterface, line 44
-			logWarn("\n\n\t\t<b>Enter the ST API Key and Save Preferences</b>\n\n") // library marker davegut.SmartThingsInterface, line 45
-			stData << [status: "ERROR", date: "no stApiKey"] // library marker davegut.SmartThingsInterface, line 46
-		} else if (!stDeviceId || stDeviceId == "") { // library marker davegut.SmartThingsInterface, line 47
-			getDeviceList() // library marker davegut.SmartThingsInterface, line 48
-			logWarn("\n\n\t\t<b>Enter the deviceId from the log List and Save Preferences</b>\n\n") // library marker davegut.SmartThingsInterface, line 49
-			stData << [status: "ERROR", date: "no stDeviceId"] // library marker davegut.SmartThingsInterface, line 50
-		} else { // library marker davegut.SmartThingsInterface, line 51
-			def stPollInterval = stPollInterval // library marker davegut.SmartThingsInterface, line 52
-			if (stPollInterval == null) {  // library marker davegut.SmartThingsInterface, line 53
-				stPollInterval = "15" // library marker davegut.SmartThingsInterface, line 54
-				device.updateSetting("stPollInterval", [type:"enum", value: "15"]) // library marker davegut.SmartThingsInterface, line 55
-			} // library marker davegut.SmartThingsInterface, line 56
-			switch(stPollInterval) { // library marker davegut.SmartThingsInterface, line 57
-				case "1" : runEvery1Minute(refresh); break // library marker davegut.SmartThingsInterface, line 58
-				case "5" : runEvery5Minutes(refresh); break // library marker davegut.SmartThingsInterface, line 59
-				case "15" : runEvery15Minutes(refresh); break // library marker davegut.SmartThingsInterface, line 60
-				case "30" : runEvery30Minutes(refresh); break // library marker davegut.SmartThingsInterface, line 61
-				default: unschedule("refresh") // library marker davegut.SmartThingsInterface, line 62
-			} // library marker davegut.SmartThingsInterface, line 63
-			deviceSetup() // library marker davegut.SmartThingsInterface, line 64
-			stData << [stPollInterval: stPollInterval] // library marker davegut.SmartThingsInterface, line 65
-		} // library marker davegut.SmartThingsInterface, line 66
-	} else { // library marker davegut.SmartThingsInterface, line 67
-		stData << [connectST: "false"] // library marker davegut.SmartThingsInterface, line 68
-	} // library marker davegut.SmartThingsInterface, line 69
-	logInfo("stUpdate: ${stData}") // library marker davegut.SmartThingsInterface, line 70
-} // library marker davegut.SmartThingsInterface, line 71
- // library marker davegut.SmartThingsInterface, line 72
-def deviceSetup() { // library marker davegut.SmartThingsInterface, line 73
-	if (!stDeviceId || stDeviceId.trim() == "") { // library marker davegut.SmartThingsInterface, line 74
-		respData = "[status: FAILED, data: no stDeviceId]" // library marker davegut.SmartThingsInterface, line 75
-		logWarn("poll: [status: ERROR, errorMsg: no stDeviceId]") // library marker davegut.SmartThingsInterface, line 76
-	} else { // library marker davegut.SmartThingsInterface, line 77
-		def sendData = [ // library marker davegut.SmartThingsInterface, line 78
-			path: "/devices/${stDeviceId.trim()}/status", // library marker davegut.SmartThingsInterface, line 79
-			parse: "distResp" // library marker davegut.SmartThingsInterface, line 80
-			] // library marker davegut.SmartThingsInterface, line 81
-		asyncGet(sendData, "deviceSetup") // library marker davegut.SmartThingsInterface, line 82
-	} // library marker davegut.SmartThingsInterface, line 83
-} // library marker davegut.SmartThingsInterface, line 84
- // library marker davegut.SmartThingsInterface, line 85
-def getDeviceList() { // library marker davegut.SmartThingsInterface, line 86
-	def sendData = [ // library marker davegut.SmartThingsInterface, line 87
-		path: "/devices", // library marker davegut.SmartThingsInterface, line 88
-		parse: "getDeviceListParse" // library marker davegut.SmartThingsInterface, line 89
-		] // library marker davegut.SmartThingsInterface, line 90
-	asyncGet(sendData) // library marker davegut.SmartThingsInterface, line 91
-} // library marker davegut.SmartThingsInterface, line 92
- // library marker davegut.SmartThingsInterface, line 93
-def getDeviceListParse(resp, data) { // library marker davegut.SmartThingsInterface, line 94
-	def respData // library marker davegut.SmartThingsInterface, line 95
-	if (resp.status == 401) { stAuthFailed() } // library marker davegut.SmartThingsInterface, line 96
-	if (resp.status != 200) { // library marker davegut.SmartThingsInterface, line 97
-		respData = [status: "ERROR", // library marker davegut.SmartThingsInterface, line 98
-					httpCode: resp.status, // library marker davegut.SmartThingsInterface, line 99
-					errorMsg: resp.errorMessage] // library marker davegut.SmartThingsInterface, line 100
-	} else { // library marker davegut.SmartThingsInterface, line 101
-		try { // library marker davegut.SmartThingsInterface, line 102
-			respData = new JsonSlurper().parseText(resp.data) // library marker davegut.SmartThingsInterface, line 103
-		} catch (err) { // library marker davegut.SmartThingsInterface, line 104
-			respData = [status: "ERROR", // library marker davegut.SmartThingsInterface, line 105
-						errorMsg: err, // library marker davegut.SmartThingsInterface, line 106
-						respData: resp.data] // library marker davegut.SmartThingsInterface, line 107
-		} // library marker davegut.SmartThingsInterface, line 108
-	} // library marker davegut.SmartThingsInterface, line 109
-	if (respData.status == "ERROR") { // library marker davegut.SmartThingsInterface, line 110
-		logWarn("getDeviceListParse: ${respData}") // library marker davegut.SmartThingsInterface, line 111
-	} else { // library marker davegut.SmartThingsInterface, line 112
-		log.info "" // library marker davegut.SmartThingsInterface, line 113
-		respData.items.each { // library marker davegut.SmartThingsInterface, line 114
-			log.trace "${it.label}:   ${it.deviceId}" // library marker davegut.SmartThingsInterface, line 115
-		} // library marker davegut.SmartThingsInterface, line 116
-		log.trace "<b>Copy your device's deviceId value and enter into the device Preferences.</b>" // library marker davegut.SmartThingsInterface, line 117
-	} // library marker davegut.SmartThingsInterface, line 118
-} // library marker davegut.SmartThingsInterface, line 119
- // library marker davegut.SmartThingsInterface, line 120
-def deviceSetupParse(mainData) { // library marker davegut.SmartThingsInterface, line 121
-	def setupData = [:] // library marker davegut.SmartThingsInterface, line 122
-	 // library marker davegut.SmartThingsInterface, line 123
-	def pictureModes = mainData["custom.picturemode"]?.supportedPictureModes?.value // library marker davegut.SmartThingsInterface, line 124
-	state.pictureModes = pictureModes // library marker davegut.SmartThingsInterface, line 125
-	setupData << [pictureModes: pictureModes] // library marker davegut.SmartThingsInterface, line 126
-	 // library marker davegut.SmartThingsInterface, line 127
-	def soundModes =  mainData["custom.soundmode"]?.supportedSoundModes?.value // library marker davegut.SmartThingsInterface, line 128
-	state.soundModes = soundModes // library marker davegut.SmartThingsInterface, line 129
-	setupData << [soundModes: soundModes] // library marker davegut.SmartThingsInterface, line 130
-	 // library marker davegut.SmartThingsInterface, line 131
-	logInfo("deviceSetupParse: ${setupData}") // library marker davegut.SmartThingsInterface, line 132
-} // library marker davegut.SmartThingsInterface, line 133
- // library marker davegut.SmartThingsInterface, line 134
-//	async: a slow cloud call must not hold the driver's only thread // library marker davegut.SmartThingsInterface, line 135
-def deviceCommand(cmdData) { // library marker davegut.SmartThingsInterface, line 136
-	logDebug("deviceCommand: $cmdData") // library marker davegut.SmartThingsInterface, line 137
-	if (!stConnected()) { // library marker davegut.SmartThingsInterface, line 138
-		logWarn("deviceCommand: [status: FAILED, data: SmartThings not connected, command: ${cmdData.command}]") // library marker davegut.SmartThingsInterface, line 139
-		return // library marker davegut.SmartThingsInterface, line 140
-	} // library marker davegut.SmartThingsInterface, line 141
-	def cmdBody = [commands: [cmdData]] // library marker davegut.SmartThingsInterface, line 142
-	def sendCmdParams = [ // library marker davegut.SmartThingsInterface, line 143
-		uri: "https://api.smartthings.com/v1", // library marker davegut.SmartThingsInterface, line 144
-		path: "/devices/${stDeviceId.trim()}/commands", // library marker davegut.SmartThingsInterface, line 145
-		headers: ['Authorization': 'Bearer ' + stApiKey.trim()], // library marker davegut.SmartThingsInterface, line 146
-		requestContentType: "application/json", // library marker davegut.SmartThingsInterface, line 147
-		contentType: "application/json", // library marker davegut.SmartThingsInterface, line 148
-		body: new groovy.json.JsonBuilder(cmdBody).toString(), // library marker davegut.SmartThingsInterface, line 149
-		timeout: 10 // library marker davegut.SmartThingsInterface, line 150
-	] // library marker davegut.SmartThingsInterface, line 151
-	asynchttpPost("deviceCommandParse", sendCmdParams, [capability: cmdData.capability]) // library marker davegut.SmartThingsInterface, line 152
-} // library marker davegut.SmartThingsInterface, line 153
- // library marker davegut.SmartThingsInterface, line 154
-def deviceCommandParse(resp, data) { // library marker davegut.SmartThingsInterface, line 155
-	if (resp.status == 200) { // library marker davegut.SmartThingsInterface, line 156
-		if (data.capability && data.capability != "refresh") { // library marker davegut.SmartThingsInterface, line 157
-			deviceRefresh() // library marker davegut.SmartThingsInterface, line 158
-		} else { // library marker davegut.SmartThingsInterface, line 159
-			poll() // library marker davegut.SmartThingsInterface, line 160
-		} // library marker davegut.SmartThingsInterface, line 161
-	} else if (resp.status == 401) { // library marker davegut.SmartThingsInterface, line 162
-		stAuthFailed() // library marker davegut.SmartThingsInterface, line 163
-	} else { // library marker davegut.SmartThingsInterface, line 164
-		logWarn("deviceCommand: [status: FAILED, httpCode: ${resp.status}, capability: ${data.capability}]") // library marker davegut.SmartThingsInterface, line 165
-		if (resp.status == 409) { // library marker davegut.SmartThingsInterface, line 166
-			logWarn("<b>Conflict internal to SmartThings.  Device may be offline in SmartThings</b>") // library marker davegut.SmartThingsInterface, line 167
-		} // library marker davegut.SmartThingsInterface, line 168
-	} // library marker davegut.SmartThingsInterface, line 169
-} // library marker davegut.SmartThingsInterface, line 170
- // library marker davegut.SmartThingsInterface, line 171
-def statusParse(mainData) { // library marker davegut.SmartThingsInterface, line 172
-	Map logData = [method: "statusParse"] // library marker davegut.SmartThingsInterface, line 173
-	if (stTestData) { // library marker davegut.SmartThingsInterface, line 174
-		device.updateSetting("stTestData", [type:"bool", value: false]) // library marker davegut.SmartThingsInterface, line 175
-		Map testData = [stTestData: mainData] // library marker davegut.SmartThingsInterface, line 176
-	} // library marker davegut.SmartThingsInterface, line 177
-	String onOff = mainData.switch.switch.value // library marker davegut.SmartThingsInterface, line 178
-	Map parseResults = [:] // library marker davegut.SmartThingsInterface, line 179
-	if (onOff == "on") { // library marker davegut.SmartThingsInterface, line 180
-		Integer volume = mainData.audioVolume.volume.value.toInteger() // library marker davegut.SmartThingsInterface, line 181
-		sendEvent(name: "volume", value: volume) // library marker davegut.SmartThingsInterface, line 182
-		sendEvent(name: "level", value: volume) // library marker davegut.SmartThingsInterface, line 183
-		parseResults << [volume: volume] // library marker davegut.SmartThingsInterface, line 184
- // library marker davegut.SmartThingsInterface, line 185
-		String mute = mainData.audioMute.mute.value // library marker davegut.SmartThingsInterface, line 186
-		sendEvent(name: "mute", value: mute) // library marker davegut.SmartThingsInterface, line 187
-		parseResults << [mute: mute] // library marker davegut.SmartThingsInterface, line 188
- // library marker davegut.SmartThingsInterface, line 189
-		String inputSource = mainData.mediaInputSource.inputSource.value // library marker davegut.SmartThingsInterface, line 190
-		sendEvent(name: "inputSource", value: inputSource)		 // library marker davegut.SmartThingsInterface, line 191
-		parseResults << [inputSource: inputSource] // library marker davegut.SmartThingsInterface, line 192
- // library marker davegut.SmartThingsInterface, line 193
-		String tvChannel = mainData.tvChannel.tvChannel.value // library marker davegut.SmartThingsInterface, line 194
-		if (tvChannel == null) { tvChannel = " " } // library marker davegut.SmartThingsInterface, line 195
-		String tvChannelName = mainData.tvChannel.tvChannelName.value // library marker davegut.SmartThingsInterface, line 196
-		parseResults << [tvChannel: tvChannel, tvChannelName: tvChannelName] // library marker davegut.SmartThingsInterface, line 197
-		if (tvChannel == " " && tvChannelName != device.currentValue("tvChannelName")) { // library marker davegut.SmartThingsInterface, line 198
-			//	tvChannel indicates app, tvChannelName is thrn spp code (ST Version) // library marker davegut.SmartThingsInterface, line 199
-			if (tvChannelName.contains(".")) { // library marker davegut.SmartThingsInterface, line 200
-				runIn(2, updateAppName) // library marker davegut.SmartThingsInterface, line 201
-			} // library marker davegut.SmartThingsInterface, line 202
-		} // library marker davegut.SmartThingsInterface, line 203
-		sendEvent(name: "tvChannel", value: tvChannel) // library marker davegut.SmartThingsInterface, line 204
-		sendEvent(name: "tvChannelName", value: tvChannelName) // library marker davegut.SmartThingsInterface, line 205
- // library marker davegut.SmartThingsInterface, line 206
-		String pictureMode = mainData["custom.picturemode"].pictureMode.value // library marker davegut.SmartThingsInterface, line 207
-		sendEvent(name: "pictureMode",value: pictureMode) // library marker davegut.SmartThingsInterface, line 208
-		parseResults << [pictureMode: pictureMode] // library marker davegut.SmartThingsInterface, line 209
- // library marker davegut.SmartThingsInterface, line 210
-		String soundMode = mainData["custom.soundmode"].soundMode.value // library marker davegut.SmartThingsInterface, line 211
-		sendEvent(name: "soundMode",value: soundMode) // library marker davegut.SmartThingsInterface, line 212
-		parseResults << [soundMode: soundMode] // library marker davegut.SmartThingsInterface, line 213
-	} // library marker davegut.SmartThingsInterface, line 214
-	logDebug(logData) // library marker davegut.SmartThingsInterface, line 215
-} // library marker davegut.SmartThingsInterface, line 216
- // library marker davegut.SmartThingsInterface, line 217
-private asyncGet(sendData, passData = "none") { // library marker davegut.SmartThingsInterface, line 218
-	if (!stApiKey || stApiKey.trim() == "") { // library marker davegut.SmartThingsInterface, line 219
-		logWarn("asyncGet: [status: ERROR, errorMsg: no stApiKey]") // library marker davegut.SmartThingsInterface, line 220
-	} else { // library marker davegut.SmartThingsInterface, line 221
-		logDebug("asyncGet: ${sendData}, ${passData}") // library marker davegut.SmartThingsInterface, line 222
-		def sendCmdParams = [ // library marker davegut.SmartThingsInterface, line 223
-			uri: "https://api.smartthings.com/v1", // library marker davegut.SmartThingsInterface, line 224
-			path: sendData.path, // library marker davegut.SmartThingsInterface, line 225
-			headers: ['Authorization': 'Bearer ' + stApiKey.trim()], // library marker davegut.SmartThingsInterface, line 226
-			timeout: 10] // library marker davegut.SmartThingsInterface, line 227
-		try { // library marker davegut.SmartThingsInterface, line 228
-			asynchttpGet(sendData.parse, sendCmdParams, [reason: passData]) // library marker davegut.SmartThingsInterface, line 229
-		} catch (error) { // library marker davegut.SmartThingsInterface, line 230
-			logWarn("asyncGet: [status: FAILED, errorMsg: ${error}]") // library marker davegut.SmartThingsInterface, line 231
-		} // library marker davegut.SmartThingsInterface, line 232
-	} // library marker davegut.SmartThingsInterface, line 233
-} // library marker davegut.SmartThingsInterface, line 234
- // library marker davegut.SmartThingsInterface, line 235
-def distResp(resp, data) { // library marker davegut.SmartThingsInterface, line 236
-	def resplog = [:] // library marker davegut.SmartThingsInterface, line 237
-	if (resp.status == 200) { // library marker davegut.SmartThingsInterface, line 238
-		try { // library marker davegut.SmartThingsInterface, line 239
-			def respData = new JsonSlurper().parseText(resp.data) // library marker davegut.SmartThingsInterface, line 240
-			if (data.reason == "deviceSetup") { // library marker davegut.SmartThingsInterface, line 241
-				deviceSetupParse(respData.components.main) // library marker davegut.SmartThingsInterface, line 242
-				runIn(1, statusParse, [data: respData.components.main]) // library marker davegut.SmartThingsInterface, line 243
-			} else { // library marker davegut.SmartThingsInterface, line 244
-				statusParse(respData.components.main) // library marker davegut.SmartThingsInterface, line 245
-			} // library marker davegut.SmartThingsInterface, line 246
-		} catch (err) { // library marker davegut.SmartThingsInterface, line 247
-			resplog << [status: "ERROR", // library marker davegut.SmartThingsInterface, line 248
-						errorMsg: err, // library marker davegut.SmartThingsInterface, line 249
-						respData: resp.data] // library marker davegut.SmartThingsInterface, line 250
-		} // library marker davegut.SmartThingsInterface, line 251
-	} else if (resp.status == 401) { // library marker davegut.SmartThingsInterface, line 252
-		stAuthFailed() // library marker davegut.SmartThingsInterface, line 253
-	} else { // library marker davegut.SmartThingsInterface, line 254
-		resplog << [status: "ERROR", // library marker davegut.SmartThingsInterface, line 255
-					httpCode: resp.status, // library marker davegut.SmartThingsInterface, line 256
-					errorMsg: resp.errorMessage] // library marker davegut.SmartThingsInterface, line 257
-	} // library marker davegut.SmartThingsInterface, line 258
-	if (resplog != [:]) { // library marker davegut.SmartThingsInterface, line 259
-		logWarn("distResp: ${resplog}") // library marker davegut.SmartThingsInterface, line 260
-	} // library marker davegut.SmartThingsInterface, line 261
-} // library marker davegut.SmartThingsInterface, line 262
+		stData << [connectST: connectST] // library marker davegut.SmartThingsInterface, line 42
+		if (!stApiKey || stApiKey == "") { // library marker davegut.SmartThingsInterface, line 43
+			logWarn("\n\n\t\t<b>Enter the ST API Key and Save Preferences</b>\n\n") // library marker davegut.SmartThingsInterface, line 44
+			stData << [status: "ERROR", data: "no stApiKey"] // library marker davegut.SmartThingsInterface, line 45
+		} else if (!stDeviceId || stDeviceId == "") { // library marker davegut.SmartThingsInterface, line 46
+			getDeviceList() // library marker davegut.SmartThingsInterface, line 47
+			logWarn("\n\n\t\t<b>Enter the deviceId from the log List and Save Preferences</b>\n\n") // library marker davegut.SmartThingsInterface, line 48
+			stData << [status: "ERROR", data: "no stDeviceId"] // library marker davegut.SmartThingsInterface, line 49
+		} else { // library marker davegut.SmartThingsInterface, line 50
+			def stPollInterval = stPollInterval // library marker davegut.SmartThingsInterface, line 51
+			if (stPollInterval == null) {  // library marker davegut.SmartThingsInterface, line 52
+				stPollInterval = "15" // library marker davegut.SmartThingsInterface, line 53
+				device.updateSetting("stPollInterval", [type:"enum", value: "15"]) // library marker davegut.SmartThingsInterface, line 54
+			} // library marker davegut.SmartThingsInterface, line 55
+			switch(stPollInterval) { // library marker davegut.SmartThingsInterface, line 56
+				case "1" : runEvery1Minute(refresh); break // library marker davegut.SmartThingsInterface, line 57
+				case "5" : runEvery5Minutes(refresh); break // library marker davegut.SmartThingsInterface, line 58
+				case "15" : runEvery15Minutes(refresh); break // library marker davegut.SmartThingsInterface, line 59
+				case "30" : runEvery30Minutes(refresh); break // library marker davegut.SmartThingsInterface, line 60
+				default: unschedule("refresh") // library marker davegut.SmartThingsInterface, line 61
+			} // library marker davegut.SmartThingsInterface, line 62
+			deviceSetup() // library marker davegut.SmartThingsInterface, line 63
+			stData << [stPollInterval: stPollInterval] // library marker davegut.SmartThingsInterface, line 64
+		} // library marker davegut.SmartThingsInterface, line 65
+	} else { // library marker davegut.SmartThingsInterface, line 66
+		stData << [connectST: "false"] // library marker davegut.SmartThingsInterface, line 67
+	} // library marker davegut.SmartThingsInterface, line 68
+	logInfo("stUpdate: ${stData}") // library marker davegut.SmartThingsInterface, line 69
+} // library marker davegut.SmartThingsInterface, line 70
+ // library marker davegut.SmartThingsInterface, line 71
+def deviceSetup() { // library marker davegut.SmartThingsInterface, line 72
+	if (!stDeviceId || stDeviceId.trim() == "") { // library marker davegut.SmartThingsInterface, line 73
+		logWarn("deviceSetup: [status: ERROR, errorMsg: no stDeviceId]") // library marker davegut.SmartThingsInterface, line 74
+	} else { // library marker davegut.SmartThingsInterface, line 75
+		def sendData = [ // library marker davegut.SmartThingsInterface, line 76
+			path: "/devices/${stDeviceId.trim()}/status", // library marker davegut.SmartThingsInterface, line 77
+			parse: "distResp" // library marker davegut.SmartThingsInterface, line 78
+			] // library marker davegut.SmartThingsInterface, line 79
+		asyncGet(sendData, "deviceSetup") // library marker davegut.SmartThingsInterface, line 80
+	} // library marker davegut.SmartThingsInterface, line 81
+} // library marker davegut.SmartThingsInterface, line 82
+ // library marker davegut.SmartThingsInterface, line 83
+def getDeviceList() { // library marker davegut.SmartThingsInterface, line 84
+	def sendData = [ // library marker davegut.SmartThingsInterface, line 85
+		path: "/devices", // library marker davegut.SmartThingsInterface, line 86
+		parse: "getDeviceListParse" // library marker davegut.SmartThingsInterface, line 87
+		] // library marker davegut.SmartThingsInterface, line 88
+	asyncGet(sendData) // library marker davegut.SmartThingsInterface, line 89
+} // library marker davegut.SmartThingsInterface, line 90
+ // library marker davegut.SmartThingsInterface, line 91
+def getDeviceListParse(resp, data) { // library marker davegut.SmartThingsInterface, line 92
+	def respData // library marker davegut.SmartThingsInterface, line 93
+	if (resp.status == 401) { stAuthFailed() } // library marker davegut.SmartThingsInterface, line 94
+	if (resp.status != 200) { // library marker davegut.SmartThingsInterface, line 95
+		respData = [status: "ERROR", // library marker davegut.SmartThingsInterface, line 96
+					httpCode: resp.status, // library marker davegut.SmartThingsInterface, line 97
+					errorMsg: resp.errorMessage] // library marker davegut.SmartThingsInterface, line 98
+	} else { // library marker davegut.SmartThingsInterface, line 99
+		try { // library marker davegut.SmartThingsInterface, line 100
+			respData = new JsonSlurper().parseText(resp.data) // library marker davegut.SmartThingsInterface, line 101
+		} catch (err) { // library marker davegut.SmartThingsInterface, line 102
+			respData = [status: "ERROR", // library marker davegut.SmartThingsInterface, line 103
+						errorMsg: err, // library marker davegut.SmartThingsInterface, line 104
+						respData: resp.data] // library marker davegut.SmartThingsInterface, line 105
+		} // library marker davegut.SmartThingsInterface, line 106
+	} // library marker davegut.SmartThingsInterface, line 107
+	if (respData.status == "ERROR") { // library marker davegut.SmartThingsInterface, line 108
+		logWarn("getDeviceListParse: ${respData}") // library marker davegut.SmartThingsInterface, line 109
+	} else { // library marker davegut.SmartThingsInterface, line 110
+		log.info "" // library marker davegut.SmartThingsInterface, line 111
+		respData.items.each { // library marker davegut.SmartThingsInterface, line 112
+			log.trace "${it.label}:   ${it.deviceId}" // library marker davegut.SmartThingsInterface, line 113
+		} // library marker davegut.SmartThingsInterface, line 114
+		log.trace "<b>Copy your device's deviceId value and enter into the device Preferences.</b>" // library marker davegut.SmartThingsInterface, line 115
+	} // library marker davegut.SmartThingsInterface, line 116
+} // library marker davegut.SmartThingsInterface, line 117
+ // library marker davegut.SmartThingsInterface, line 118
+def deviceSetupParse(mainData) { // library marker davegut.SmartThingsInterface, line 119
+	def setupData = [:] // library marker davegut.SmartThingsInterface, line 120
+	 // library marker davegut.SmartThingsInterface, line 121
+	def pictureModes = mainData["custom.picturemode"]?.supportedPictureModes?.value // library marker davegut.SmartThingsInterface, line 122
+	state.pictureModes = pictureModes // library marker davegut.SmartThingsInterface, line 123
+	setupData << [pictureModes: pictureModes] // library marker davegut.SmartThingsInterface, line 124
+	 // library marker davegut.SmartThingsInterface, line 125
+	def soundModes =  mainData["custom.soundmode"]?.supportedSoundModes?.value // library marker davegut.SmartThingsInterface, line 126
+	state.soundModes = soundModes // library marker davegut.SmartThingsInterface, line 127
+	setupData << [soundModes: soundModes] // library marker davegut.SmartThingsInterface, line 128
+	 // library marker davegut.SmartThingsInterface, line 129
+	logInfo("deviceSetupParse: ${setupData}") // library marker davegut.SmartThingsInterface, line 130
+} // library marker davegut.SmartThingsInterface, line 131
+ // library marker davegut.SmartThingsInterface, line 132
+//	async: a slow cloud call must not hold the driver's only thread // library marker davegut.SmartThingsInterface, line 133
+def deviceCommand(cmdData) { // library marker davegut.SmartThingsInterface, line 134
+	logDebug("deviceCommand: $cmdData") // library marker davegut.SmartThingsInterface, line 135
+	if (!stConnected()) { // library marker davegut.SmartThingsInterface, line 136
+		logWarn("deviceCommand: [status: FAILED, data: SmartThings not connected, command: ${cmdData.command}]") // library marker davegut.SmartThingsInterface, line 137
+		return // library marker davegut.SmartThingsInterface, line 138
+	} // library marker davegut.SmartThingsInterface, line 139
+	def cmdBody = [commands: [cmdData]] // library marker davegut.SmartThingsInterface, line 140
+	def sendCmdParams = [ // library marker davegut.SmartThingsInterface, line 141
+		uri: "https://api.smartthings.com/v1", // library marker davegut.SmartThingsInterface, line 142
+		path: "/devices/${stDeviceId.trim()}/commands", // library marker davegut.SmartThingsInterface, line 143
+		headers: ['Authorization': 'Bearer ' + stApiKey.trim()], // library marker davegut.SmartThingsInterface, line 144
+		requestContentType: "application/json", // library marker davegut.SmartThingsInterface, line 145
+		contentType: "application/json", // library marker davegut.SmartThingsInterface, line 146
+		body: new groovy.json.JsonBuilder(cmdBody).toString(), // library marker davegut.SmartThingsInterface, line 147
+		timeout: 10 // library marker davegut.SmartThingsInterface, line 148
+	] // library marker davegut.SmartThingsInterface, line 149
+	asynchttpPost("deviceCommandParse", sendCmdParams, [capability: cmdData.capability]) // library marker davegut.SmartThingsInterface, line 150
+} // library marker davegut.SmartThingsInterface, line 151
+ // library marker davegut.SmartThingsInterface, line 152
+def deviceCommandParse(resp, data) { // library marker davegut.SmartThingsInterface, line 153
+	if (resp.status == 200) { // library marker davegut.SmartThingsInterface, line 154
+		if (data.capability && data.capability != "refresh") { // library marker davegut.SmartThingsInterface, line 155
+			deviceRefresh() // library marker davegut.SmartThingsInterface, line 156
+		} else { // library marker davegut.SmartThingsInterface, line 157
+			poll() // library marker davegut.SmartThingsInterface, line 158
+		} // library marker davegut.SmartThingsInterface, line 159
+	} else if (resp.status == 401) { // library marker davegut.SmartThingsInterface, line 160
+		stAuthFailed() // library marker davegut.SmartThingsInterface, line 161
+	} else { // library marker davegut.SmartThingsInterface, line 162
+		logWarn("deviceCommand: [status: FAILED, httpCode: ${resp.status}, capability: ${data.capability}]") // library marker davegut.SmartThingsInterface, line 163
+		if (resp.status == 409) { // library marker davegut.SmartThingsInterface, line 164
+			logWarn("<b>Conflict internal to SmartThings.  Device may be offline in SmartThings</b>") // library marker davegut.SmartThingsInterface, line 165
+		} // library marker davegut.SmartThingsInterface, line 166
+	} // library marker davegut.SmartThingsInterface, line 167
+} // library marker davegut.SmartThingsInterface, line 168
+ // library marker davegut.SmartThingsInterface, line 169
+def statusParse(mainData) { // library marker davegut.SmartThingsInterface, line 170
+	Map logData = [method: "statusParse"] // library marker davegut.SmartThingsInterface, line 171
+	if (stTestData) { // library marker davegut.SmartThingsInterface, line 172
+		device.updateSetting("stTestData", [type:"bool", value: false]) // library marker davegut.SmartThingsInterface, line 173
+		logInfo([stTestData: mainData]) // library marker davegut.SmartThingsInterface, line 174
+	} // library marker davegut.SmartThingsInterface, line 175
+	String onOff = mainData.switch.switch.value // library marker davegut.SmartThingsInterface, line 176
+	Map parseResults = [:] // library marker davegut.SmartThingsInterface, line 177
+	if (onOff == "on") { // library marker davegut.SmartThingsInterface, line 178
+		Integer volume = mainData.audioVolume.volume.value.toInteger() // library marker davegut.SmartThingsInterface, line 179
+		sendEvent(name: "volume", value: volume) // library marker davegut.SmartThingsInterface, line 180
+		sendEvent(name: "level", value: volume) // library marker davegut.SmartThingsInterface, line 181
+		parseResults << [volume: volume] // library marker davegut.SmartThingsInterface, line 182
+ // library marker davegut.SmartThingsInterface, line 183
+		String mute = mainData.audioMute.mute.value // library marker davegut.SmartThingsInterface, line 184
+		sendEvent(name: "mute", value: mute) // library marker davegut.SmartThingsInterface, line 185
+		parseResults << [mute: mute] // library marker davegut.SmartThingsInterface, line 186
+ // library marker davegut.SmartThingsInterface, line 187
+		//	2018+ Samsung TVs report the input in samsungvd.mediaInputSource; mediaInputSource stays null // library marker davegut.SmartThingsInterface, line 188
+		String inputCap = mainData["samsungvd.mediaInputSource"] ? "samsungvd.mediaInputSource" : "mediaInputSource" // library marker davegut.SmartThingsInterface, line 189
+		state.inputSourceCap = inputCap // library marker davegut.SmartThingsInterface, line 190
+		String inputSource = mainData[inputCap]?.inputSource?.value // library marker davegut.SmartThingsInterface, line 191
+		sendEvent(name: "inputSource", value: inputSource)		 // library marker davegut.SmartThingsInterface, line 192
+		parseResults << [inputSource: inputSource] // library marker davegut.SmartThingsInterface, line 193
+ // library marker davegut.SmartThingsInterface, line 194
+		String tvChannel = mainData.tvChannel.tvChannel.value // library marker davegut.SmartThingsInterface, line 195
+		if (tvChannel == null) { tvChannel = " " } // library marker davegut.SmartThingsInterface, line 196
+		String tvChannelName = mainData.tvChannel.tvChannelName.value // library marker davegut.SmartThingsInterface, line 197
+		parseResults << [tvChannel: tvChannel, tvChannelName: tvChannelName] // library marker davegut.SmartThingsInterface, line 198
+		if (tvChannel == " " && tvChannelName != device.currentValue("tvChannelName")) { // library marker davegut.SmartThingsInterface, line 199
+			//	a blank tvChannel means an app; tvChannelName is then the app code (SmartThings) // library marker davegut.SmartThingsInterface, line 200
+			if (tvChannelName.contains(".")) { // library marker davegut.SmartThingsInterface, line 201
+				runIn(2, updateAppName) // library marker davegut.SmartThingsInterface, line 202
+			} // library marker davegut.SmartThingsInterface, line 203
+		} // library marker davegut.SmartThingsInterface, line 204
+		sendEvent(name: "tvChannel", value: tvChannel) // library marker davegut.SmartThingsInterface, line 205
+		sendEvent(name: "tvChannelName", value: tvChannelName) // library marker davegut.SmartThingsInterface, line 206
+ // library marker davegut.SmartThingsInterface, line 207
+		String pictureMode = mainData["custom.picturemode"].pictureMode.value // library marker davegut.SmartThingsInterface, line 208
+		sendEvent(name: "pictureMode",value: pictureMode) // library marker davegut.SmartThingsInterface, line 209
+		parseResults << [pictureMode: pictureMode] // library marker davegut.SmartThingsInterface, line 210
+ // library marker davegut.SmartThingsInterface, line 211
+		String soundMode = mainData["custom.soundmode"].soundMode.value // library marker davegut.SmartThingsInterface, line 212
+		sendEvent(name: "soundMode",value: soundMode) // library marker davegut.SmartThingsInterface, line 213
+		parseResults << [soundMode: soundMode] // library marker davegut.SmartThingsInterface, line 214
+	} // library marker davegut.SmartThingsInterface, line 215
+	logDebug(logData + parseResults) // library marker davegut.SmartThingsInterface, line 216
+} // library marker davegut.SmartThingsInterface, line 217
+ // library marker davegut.SmartThingsInterface, line 218
+private asyncGet(sendData, passData = "none") { // library marker davegut.SmartThingsInterface, line 219
+	if (!stApiKey || stApiKey.trim() == "") { // library marker davegut.SmartThingsInterface, line 220
+		logWarn("asyncGet: [status: ERROR, errorMsg: no stApiKey]") // library marker davegut.SmartThingsInterface, line 221
+	} else { // library marker davegut.SmartThingsInterface, line 222
+		logDebug("asyncGet: [parse: ${sendData.parse}, reason: ${passData}]") // library marker davegut.SmartThingsInterface, line 223
+		def sendCmdParams = [ // library marker davegut.SmartThingsInterface, line 224
+			uri: "https://api.smartthings.com/v1", // library marker davegut.SmartThingsInterface, line 225
+			path: sendData.path, // library marker davegut.SmartThingsInterface, line 226
+			headers: ['Authorization': 'Bearer ' + stApiKey.trim()], // library marker davegut.SmartThingsInterface, line 227
+			timeout: 10] // library marker davegut.SmartThingsInterface, line 228
+		try { // library marker davegut.SmartThingsInterface, line 229
+			asynchttpGet(sendData.parse, sendCmdParams, [reason: passData]) // library marker davegut.SmartThingsInterface, line 230
+		} catch (error) { // library marker davegut.SmartThingsInterface, line 231
+			logWarn("asyncGet: [status: FAILED, errorMsg: ${error}]") // library marker davegut.SmartThingsInterface, line 232
+		} // library marker davegut.SmartThingsInterface, line 233
+	} // library marker davegut.SmartThingsInterface, line 234
+} // library marker davegut.SmartThingsInterface, line 235
+ // library marker davegut.SmartThingsInterface, line 236
+def distResp(resp, data) { // library marker davegut.SmartThingsInterface, line 237
+	def resplog = [:] // library marker davegut.SmartThingsInterface, line 238
+	if (resp.status == 200) { // library marker davegut.SmartThingsInterface, line 239
+		try { // library marker davegut.SmartThingsInterface, line 240
+			def respData = new JsonSlurper().parseText(resp.data) // library marker davegut.SmartThingsInterface, line 241
+			if (data.reason == "deviceSetup") { // library marker davegut.SmartThingsInterface, line 242
+				deviceSetupParse(respData.components.main) // library marker davegut.SmartThingsInterface, line 243
+				runIn(1, statusParse, [data: respData.components.main]) // library marker davegut.SmartThingsInterface, line 244
+			} else { // library marker davegut.SmartThingsInterface, line 245
+				statusParse(respData.components.main) // library marker davegut.SmartThingsInterface, line 246
+			} // library marker davegut.SmartThingsInterface, line 247
+		} catch (err) { // library marker davegut.SmartThingsInterface, line 248
+			resplog << [status: "ERROR", // library marker davegut.SmartThingsInterface, line 249
+						errorMsg: err, // library marker davegut.SmartThingsInterface, line 250
+						respData: resp.data] // library marker davegut.SmartThingsInterface, line 251
+		} // library marker davegut.SmartThingsInterface, line 252
+	} else if (resp.status == 401) { // library marker davegut.SmartThingsInterface, line 253
+		stAuthFailed() // library marker davegut.SmartThingsInterface, line 254
+	} else { // library marker davegut.SmartThingsInterface, line 255
+		resplog << [status: "ERROR", // library marker davegut.SmartThingsInterface, line 256
+					httpCode: resp.status, // library marker davegut.SmartThingsInterface, line 257
+					errorMsg: resp.errorMessage] // library marker davegut.SmartThingsInterface, line 258
+	} // library marker davegut.SmartThingsInterface, line 259
+	if (resplog != [:]) { // library marker davegut.SmartThingsInterface, line 260
+		logWarn("distResp: ${resplog}") // library marker davegut.SmartThingsInterface, line 261
+	} // library marker davegut.SmartThingsInterface, line 262
+} // library marker davegut.SmartThingsInterface, line 263
 // ~~~~~ end include (4) davegut.SmartThingsInterface ~~~~~
 // ~~~~~ start include (5) davegut.samsungTvST ~~~~~
 library ( // library marker davegut.samsungTvST, line 1
@@ -1679,27 +1711,27 @@ library ( // library marker davegut.samsungTvST, line 1
 command "toggleSoundMode", [[name: "SmartThings Function"]] // library marker davegut.samsungTvST, line 10
 command "togglePictureMode", [[name: "SmartThings Function"]] // library marker davegut.samsungTvST, line 11
 command "sourceSetST", ["SmartThings Function"] // library marker davegut.samsungTvST, line 12
-attribute "inputSource", "string" // library marker davegut.samsungTvST, line 13
-command "setVolume", ["SmartThings Function"] // library marker davegut.samsungTvST, line 14
-command "setPictureMode", ["SmartThings Function"] // library marker davegut.samsungTvST, line 15
-command "setSoundMode", ["SmartThings Function"] // library marker davegut.samsungTvST, line 16
-command "setLevel", ["SmartThings Function"] // library marker davegut.samsungTvST, line 17
-attribute "level", "NUMBER" // library marker davegut.samsungTvST, line 18
- // library marker davegut.samsungTvST, line 19
-def deviceRefresh() { // library marker davegut.samsungTvST, line 20
-	if (stConnected()) { // library marker davegut.samsungTvST, line 21
-		def cmdData = [ // library marker davegut.samsungTvST, line 22
-			component: "main", // library marker davegut.samsungTvST, line 23
-			capability: "refresh", // library marker davegut.samsungTvST, line 24
-			command: "refresh", // library marker davegut.samsungTvST, line 25
-			arguments: []] // library marker davegut.samsungTvST, line 26
-		deviceCommand(cmdData) // library marker davegut.samsungTvST, line 27
-	} // library marker davegut.samsungTvST, line 28
-} // library marker davegut.samsungTvST, line 29
- // library marker davegut.samsungTvST, line 30
-def poll() { // library marker davegut.samsungTvST, line 31
-	if (!stDeviceId || stDeviceId.trim() == "") { // library marker davegut.samsungTvST, line 32
-		respData = "[status: FAILED, data: no stDeviceId]" // library marker davegut.samsungTvST, line 33
+command "setInputSource", [[name: "Input source (SmartThings)", type: "STRING"]] // library marker davegut.samsungTvST, line 13
+attribute "inputSource", "string" // library marker davegut.samsungTvST, line 14
+command "setVolume", ["SmartThings Function"] // library marker davegut.samsungTvST, line 15
+command "setPictureMode", ["SmartThings Function"] // library marker davegut.samsungTvST, line 16
+command "setSoundMode", ["SmartThings Function"] // library marker davegut.samsungTvST, line 17
+command "setLevel", ["SmartThings Function"] // library marker davegut.samsungTvST, line 18
+attribute "level", "NUMBER" // library marker davegut.samsungTvST, line 19
+ // library marker davegut.samsungTvST, line 20
+def deviceRefresh() { // library marker davegut.samsungTvST, line 21
+	if (stConnected()) { // library marker davegut.samsungTvST, line 22
+		def cmdData = [ // library marker davegut.samsungTvST, line 23
+			component: "main", // library marker davegut.samsungTvST, line 24
+			capability: "refresh", // library marker davegut.samsungTvST, line 25
+			command: "refresh", // library marker davegut.samsungTvST, line 26
+			arguments: []] // library marker davegut.samsungTvST, line 27
+		deviceCommand(cmdData) // library marker davegut.samsungTvST, line 28
+	} // library marker davegut.samsungTvST, line 29
+} // library marker davegut.samsungTvST, line 30
+ // library marker davegut.samsungTvST, line 31
+def poll() { // library marker davegut.samsungTvST, line 32
+	if (!stDeviceId || stDeviceId.trim() == "") { // library marker davegut.samsungTvST, line 33
 		logWarn("poll: [status: ERROR, errorMsg: no stDeviceId]") // library marker davegut.samsungTvST, line 34
 	} else { // library marker davegut.samsungTvST, line 35
 		def sendData = [ // library marker davegut.samsungTvST, line 36
@@ -1776,7 +1808,7 @@ def setInputSource(inputSource) { sourceSetST(inputSource) } // library marker d
 def sourceSetST(inputSource) { // library marker davegut.samsungTvST, line 107
 	def cmdData = [ // library marker davegut.samsungTvST, line 108
 		component: "main", // library marker davegut.samsungTvST, line 109
-		capability: "mediaInputSource", // library marker davegut.samsungTvST, line 110
+		capability: state.inputSourceCap ?: "mediaInputSource", // library marker davegut.samsungTvST, line 110
 		command: "setInputSource", // library marker davegut.samsungTvST, line 111
 		arguments: [inputSource]] // library marker davegut.samsungTvST, line 112
 	deviceCommand(cmdData) // library marker davegut.samsungTvST, line 113
@@ -1813,7 +1845,7 @@ library ( // library marker davegut.Logging, line 1
  // library marker davegut.Logging, line 10
 def nameSpace() { return "davegut" } // library marker davegut.Logging, line 11
  // library marker davegut.Logging, line 12
-def version() { return "2.4.1" } // library marker davegut.Logging, line 13
+def version() { return "2.4.2" } // library marker davegut.Logging, line 13
  // library marker davegut.Logging, line 14
 def label() { // library marker davegut.Logging, line 15
 	if (device) {  // library marker davegut.Logging, line 16

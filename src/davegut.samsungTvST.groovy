@@ -10,6 +10,7 @@ library (
 command "toggleSoundMode", [[name: "SmartThings Function"]]
 command "togglePictureMode", [[name: "SmartThings Function"]]
 command "sourceSetST", ["SmartThings Function"]
+command "setInputSource", [[name: "Input source (SmartThings)", type: "STRING"]]
 attribute "inputSource", "string"
 command "setVolume", ["SmartThings Function"]
 command "setPictureMode", ["SmartThings Function"]
@@ -30,7 +31,6 @@ def deviceRefresh() {
 
 def poll() {
 	if (!stDeviceId || stDeviceId.trim() == "") {
-		respData = "[status: FAILED, data: no stDeviceId]"
 		logWarn("poll: [status: ERROR, errorMsg: no stDeviceId]")
 	} else {
 		def sendData = [
@@ -107,7 +107,7 @@ def setInputSource(inputSource) { sourceSetST(inputSource) }
 def sourceSetST(inputSource) {
 	def cmdData = [
 		component: "main",
-		capability: "mediaInputSource",
+		capability: state.inputSourceCap ?: "mediaInputSource",
 		command: "setInputSource",
 		arguments: [inputSource]]
 	deviceCommand(cmdData)

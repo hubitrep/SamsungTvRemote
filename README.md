@@ -31,6 +31,23 @@ After updating, open each TV device and click Save Preferences.
 
 ## Changes
 
+### 2.4.2
+
+- With SmartThings, `inputSource` reads and sets the input through `samsungvd.mediaInputSource`
+  when the TV reports it (2018 and later TVs leave the standard `mediaInputSource` empty).
+- The switch logs at info when it changes, including when the TV is turned on or off with its own
+  remote.
+- `on()` resends Wake-on-LAN at 10 s and 20 s until the TV answers; on Wi-Fi it often misses
+  the first packet. With SmartThings, it also sends SmartThings `switch on` at 17 s if the TV
+  still hasn't answered.
+- `setInputSource` is a command on the device page (same as `sourceSetST`).
+- Saving preferences with the TV off now warns that the saved TV settings were kept, so a wrong IP
+  address shows up.
+- A code update is also applied at hub start and on `refresh`, not only at the next power poll.
+- `appOpenByName` and app presets no longer report a failed launch when the app opened. The TV
+  answers `true`, which the driver couldn't parse, so `appName` and `appId` were never set and
+  `presetCreate` couldn't save an app.
+
 ### 2.4.1
 
 - The device's Data section shows the TV's model number (`modelName`), platform (`platform`) and
@@ -85,7 +102,8 @@ The Frame and SmartThings changes are untested on hardware.
   permission on the TV again.
 - The art-mode socket is no longer opened on TVs that are not Frames.
 - Key payloads include `Option: "false"`, as other Samsung TV clients send.
-- New preference: close the websocket after an idle period (default: never).
+- New preference: close the websocket after an idle period (default: never). On a TV that doesn't
+  report `PowerState`, the next power poll reopens it, so the setting has no lasting effect there.
 - With the TV off, a code update or Save Preferences no longer logs an error once the device is set
   up (the saved TV settings are kept), and no warning about the app-code scan unless one was asked for.
 - After a code update the driver re-initializes once on its next poll.

@@ -74,10 +74,10 @@ def installed() {
 //	called on hub start: the socket did not survive the reboot
 def initialize() {
 	close()
+	checkDriverVersion()
 }
 
 def updated() {
-	sendEvent(name: "numberOfButtons", value: "60")
 	unschedule()
 	close()
 	["wsQueue", "currentFunction", "pendingPowerHold", "powerProbeAt",
@@ -97,7 +97,7 @@ def updated() {
 		updStatus << [setOnPollInterval: setOnPollInterval()]
 		sendEvent(name: "numberOfButtons", value: 60)
 		sendEvent(name: "wsStatus", value: "closed")
-		def action = configure()
+		configure()
 		if (!state.appData) { state.appData = [:] }
 		updStatus << [updApps: updateAppCodes()]
 	}
@@ -105,16 +105,17 @@ def updated() {
 }
 
 def setOnPollInterval() {
-	if (pollInterval == null) {
-		pollInterval = "60"
+	String interval = pollInterval
+	if (interval == null) {
+		interval = "60"
 		device.updateSetting("pollInterval", [type:"enum", value: "60"])
 	}
-	if (pollInterval == "60") {
+	if (interval == "60") {
 		runEvery1Minute(onPoll)
-	} else if (pollInterval != "off") {
-		schedule("0/${pollInterval} * * * * ?",  onPoll)
+	} else if (interval != "off") {
+		schedule("0/${interval} * * * * ?",  onPoll)
 	}
-	return pollInterval
+	return interval
 }
 
 def configure() {
@@ -129,6 +130,7 @@ def configure() {
 		tvData << [status: "error", data: error]
 		if (getDataValue("alternateWolMac")) {
 			tvData << [action: "kept saved TV settings"]
+			logWarn("configure: no reply from ${deviceIp}. Kept the saved TV settings; if the TV is on, check the IP address.")
 		} else {
 			logError("configure: TV Off during setup or Invalid IP address.\n\t\tTurn TV On and Run CONFIGURE or Save Preferences!")
 		}
@@ -139,7 +141,11 @@ def configure() {
 		updateDataValue("deviceMac", wifiMac)
 		def alternateWolMac = wifiMac.replaceAll(":", "").toUpperCase()
 		updateDataValue("alternateWolMac", alternateWolMac)
-		device.setDeviceNetworkId(alternateWolMac)
+		try {
+			device.setDeviceNetworkId(alternateWolMac)
+		} catch (e) {
+			logWarn("configure: [setDeviceNetworkId: ${alternateWolMac}, error: ${e}]")
+		}
 		def modelYear = "20" + tvData.device.model[0..1]
 		updateDataValue("modelYear", modelYear)
 		def frameTv = "false"
@@ -184,6 +190,11 @@ def onPoll() {
 	if (ws().phase == "closed" && device.currentValue("wsStatus") == "open") {
 		sendEvent(name: "wsStatus", value: "closed")
 	}
+	checkDriverVersion()
+}
+
+//	a code push doesn't run updated(); catch it at the next poll, refresh or hub start
+def checkDriverVersion() {
 	if (getDataValue("driverVersion") != driverVer()) {
 		updateDriver()
 	}
@@ -268,6 +279,7 @@ def setPowerState(onOff, Map logData) {
 	sendEvent(name: "switch", value: onOff)
 	if (prev != onOff) {
 		logData << [switch: onOff]
+		logInfo("setPowerState: [switch: ${onOff}]")
 		if (onOff == "on") {
 			//	startup display only after on(), not when a poll blip recovers
 			if (state.powerOnAt && now() - state.powerOnAt < 120000) {
@@ -289,6 +301,15 @@ def on() {
 	state.powerOffAt = null
 	state.lastWsFailure = null
 	//	WoL only: KEY_POWER is a toggle and can switch an on TV off
+	sendWol()
+	//	the TV takes several seconds to boot; WoL over Wi-Fi is often missed, so resend
+	runIn(10, onPollWol)
+	runIn(20, onPollAgain)
+	//	after the 10 s poll has answered or timed out (6 s)
+	if (stConnected()) { runIn(17, stPowerOn) }
+}
+
+def sendWol() {
 	def wolMac = getDataValue("alternateWolMac")
 	def cmd = "FFFFFFFFFFFF$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac"
 	//	send to both WoL ports (9 and 7)
@@ -300,12 +321,24 @@ def on() {
 			 encoding: hubitat.device.HubAction.Encoding.HEX_STRING,
 			 ignoreResponse: true]))
 	}
-	//	the TV takes several seconds to boot
-	runIn(10, onPoll)
-	runIn(20, onPollAgain)
 }
 
-def onPollAgain() { onPoll() }
+def onPollWol() { resendWol(); onPoll() }
+def onPollAgain() { resendWol(); onPoll() }
+
+def resendWol() {
+	if (!state.powerOnAt) { return }		//	cleared once the TV is seen on, or by off()
+	logDebug([method: "resendWol", secs: (now() - state.powerOnAt) / 1000])
+	sendWol()
+}
+
+//	Wake-on-LAN missed; SmartThings can often still wake the TV
+def stPowerOn() {
+	if (!state.powerOnAt) { return }
+	logInfo("stPowerOn: [reason: no answer to Wake-on-LAN]")
+	deviceCommand([component: "main", capability: "switch", command: "on", arguments: []])
+	runIn(5, onPoll)
+}
 
 def setPowerOnMode() {
 	logInfo("setPowerOnMode: [tvPwrOnMode: ${tvPwrOnMode}]")
@@ -352,7 +385,7 @@ def powerHoldRelease() {
 }
 
 def setPowerOffMode() {
-	logInfo("setPowerOfMode")
+	logInfo("setPowerOffMode")
 	sendEvent(name: "appId", value: " ")
 	sendEvent(name: "appName", value: " ")
 	sendEvent(name: "tvChannel", value: " ")
@@ -365,6 +398,7 @@ def setVariable(valueString) {
 }
 
 def refresh() {
+	checkDriverVersion()
 	if (stConnected()) {
 		deviceRefresh()
 	}
@@ -478,7 +512,6 @@ def push(pushed) {
 }
 
 //	===== Libraries =====
-//#include davegut.samsungTvTEST
 
 #include davegut.samsungTvWebsocket
 #include davegut.samsungTvApps

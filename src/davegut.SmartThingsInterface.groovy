@@ -39,15 +39,14 @@ def stUpdate() {
 	def stData = [:]
 	state.remove("stAuthFailed")		//	a Save retries the key
 	if (connectST) {
-		stData << [connectST: "true"]
 		stData << [connectST: connectST]
 		if (!stApiKey || stApiKey == "") {
 			logWarn("\n\n\t\t<b>Enter the ST API Key and Save Preferences</b>\n\n")
-			stData << [status: "ERROR", date: "no stApiKey"]
+			stData << [status: "ERROR", data: "no stApiKey"]
 		} else if (!stDeviceId || stDeviceId == "") {
 			getDeviceList()
 			logWarn("\n\n\t\t<b>Enter the deviceId from the log List and Save Preferences</b>\n\n")
-			stData << [status: "ERROR", date: "no stDeviceId"]
+			stData << [status: "ERROR", data: "no stDeviceId"]
 		} else {
 			def stPollInterval = stPollInterval
 			if (stPollInterval == null) { 
@@ -72,8 +71,7 @@ def stUpdate() {
 
 def deviceSetup() {
 	if (!stDeviceId || stDeviceId.trim() == "") {
-		respData = "[status: FAILED, data: no stDeviceId]"
-		logWarn("poll: [status: ERROR, errorMsg: no stDeviceId]")
+		logWarn("deviceSetup: [status: ERROR, errorMsg: no stDeviceId]")
 	} else {
 		def sendData = [
 			path: "/devices/${stDeviceId.trim()}/status",
@@ -173,7 +171,7 @@ def statusParse(mainData) {
 	Map logData = [method: "statusParse"]
 	if (stTestData) {
 		device.updateSetting("stTestData", [type:"bool", value: false])
-		Map testData = [stTestData: mainData]
+		logInfo([stTestData: mainData])
 	}
 	String onOff = mainData.switch.switch.value
 	Map parseResults = [:]
@@ -187,7 +185,10 @@ def statusParse(mainData) {
 		sendEvent(name: "mute", value: mute)
 		parseResults << [mute: mute]
 
-		String inputSource = mainData.mediaInputSource.inputSource.value
+		//	2018+ Samsung TVs report the input in samsungvd.mediaInputSource; mediaInputSource stays null
+		String inputCap = mainData["samsungvd.mediaInputSource"] ? "samsungvd.mediaInputSource" : "mediaInputSource"
+		state.inputSourceCap = inputCap
+		String inputSource = mainData[inputCap]?.inputSource?.value
 		sendEvent(name: "inputSource", value: inputSource)		
 		parseResults << [inputSource: inputSource]
 
@@ -196,7 +197,7 @@ def statusParse(mainData) {
 		String tvChannelName = mainData.tvChannel.tvChannelName.value
 		parseResults << [tvChannel: tvChannel, tvChannelName: tvChannelName]
 		if (tvChannel == " " && tvChannelName != device.currentValue("tvChannelName")) {
-			//	tvChannel indicates app, tvChannelName is thrn spp code (ST Version)
+			//	a blank tvChannel means an app; tvChannelName is then the app code (SmartThings)
 			if (tvChannelName.contains(".")) {
 				runIn(2, updateAppName)
 			}
@@ -212,14 +213,14 @@ def statusParse(mainData) {
 		sendEvent(name: "soundMode",value: soundMode)
 		parseResults << [soundMode: soundMode]
 	}
-	logDebug(logData)
+	logDebug(logData + parseResults)
 }
 
 private asyncGet(sendData, passData = "none") {
 	if (!stApiKey || stApiKey.trim() == "") {
 		logWarn("asyncGet: [status: ERROR, errorMsg: no stApiKey]")
 	} else {
-		logDebug("asyncGet: ${sendData}, ${passData}")
+		logDebug("asyncGet: [parse: ${sendData.parse}, reason: ${passData}]")
 		def sendCmdParams = [
 			uri: "https://api.smartthings.com/v1",
 			path: sendData.path,

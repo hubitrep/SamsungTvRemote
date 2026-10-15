@@ -1,12 +1,12 @@
 {
   "packageName": "Samsung TV Remote (hubitrep)",
   "author": "hubitrep (original by David Gutheinz)",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "minimumHEVersion": "2.3.9",
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
   "communityLink": "https://community.hubitat.com/t/samsung-hubitat-tv-integration-2016-and-later/55120",
   "dateReleased": "2026-10-14",
-  "releaseNotes": "The device page shows the TV model, platform and API version, and whether the TV reports PowerState. Full list in the README.",
+  "releaseNotes": "App launch and app presets work again. on() resends Wake-on-LAN, then tries SmartThings when linked. With SmartThings, inputSource reports and sets the input on 2018 and later TVs. Full list in the README.",
   "drivers": [
     {
       "id": "70c694f2-d2cb-4c00-9357-28376f9c794f",
