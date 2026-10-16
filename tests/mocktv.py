@@ -57,7 +57,8 @@ def device_info(request):
     dev.update({"duid": f"uuid:{UUID}", "id": f"uuid:{UUID}", "udn": f"uuid:{UUID}", "ip": host,
                 "wifiMac": MAC, "name": "[TV] Mock", "ssid": "", "developerIP": "0.0.0.0"})
     if reports_power():
-        state = "on" if tv["power"] == "on" else "standby"
+        # while shutting down the TU7000 still reports on (its report's wentAway has no "PowerState standby")
+        state = "on" if tv["power"] == "on" or shutting_down() else "standby"
         if frame() and tv["art"] == "on" and P.get("powerStateInArt"):
             state = P["powerStateInArt"]
         dev["PowerState"] = state

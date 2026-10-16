@@ -1,5 +1,5 @@
 {
-  "_source": "2020 TU7000 (UN50TU7000FXZC): tester report 0.1.0 and a direct /api/v2/ read, 2026-10-15. launchMs from the driver's note (the TV answers a launch after about 6 s); bootS from the TV answering /api/v2/ within 5 s of Wake-on-LAN.",
+  "_source": "2020 TU7000 (UN50TU7000FXZC): tester reports 0.1.0 and 0.2.0, 2026-10-15 (deviceInfo, isSupport and apiVersion from 0.2.0 match a direct /api/v2/ read). bootS from the TV answering /api/v2/ within 5 s of Wake-on-LAN.",
   "deviceInfo": {
     "FrameTVSupport": "false", "GamePadSupport": "true", "ImeSyncedSupport": "true", "Language": "fr_CA", "OS": "Tizen",
     "PowerState": "on", "TokenAuthSupport": "true", "VoiceSupport": "false", "WallScreenRatio": "0", "WallService": "false",
@@ -17,10 +17,10 @@
   "connectMs": 1352,
   "otherMessages": "",
   "wentAway": "REST stopped",
-  "restAfterOffS": 0,
+  "restAfterOffS": 2,
   "probeReply": "ms.channel.timeOut",
   "bootS": 5,
-  "launchMs": 6000,
+  "launchMs": 6930,
   "closeBody": "true",
   "answered": false,
   "apps": null,
