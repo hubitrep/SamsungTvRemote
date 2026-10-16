@@ -1,4 +1,32 @@
-# Mock Samsung TV
+# Tests
+
+## Samsung TV Remote Tester
+
+`SamsungTVRemoteTester.groovy` is an app that runs the driver through a fixed set of tests against a
+real TV and writes a report to paste in a forum post: what the TV sent (the driver's trace lines),
+what the driver made of it (the device's events), and where either differs from what the driver
+expects. Install it, select the Samsung TV Remote device, and press Run. The tests press HOME, launch
+an app if the device knows its code, switch a Frame to art mode, and turn the TV off and on.
+
+| # | Test | Checks |
+|---|---|---|
+| 1 | Device info | the `/api/v2/` reply: status, time, `PowerState` |
+| 2 | Remote socket | the handshake reply, its time, the key sent after it |
+| 3 | Key burst | three keys with the socket closed: one connect, three keys |
+| 4 | Power off | how the TV goes away; the switch goes off and stays off |
+| 5 | Power on | Wake-on-LAN sends, time to the first answer, the switch |
+| 6 | Standby check | TVs without `PowerState`: the probe gets `ms.channel.timeOut` |
+| 7 | Art mode | Frame TVs: art channel handshake, status reply, setting it there |
+| 8 | Apps | launch and close by REST, and the app events |
+| 9 | App list | whether the TV answers `ed.installedApp.get` |
+
+- `test-tester-helpers.groovy`: unit tests for its pure helpers, no hub needed
+  (`groovy tests/test-tester-helpers.groovy`).
+- `test-live-tv.sh [@hub]`: runs it through its endpoints (turn on Script access in the app) and
+  prints `[PASS]`/`[FAIL]`/`[WARN]` per test; exit 0, 1 on a driver difference, 2 if it couldn't run.
+  It reads hub addresses from `.hubitat.json` in the current directory, or `HUBITAT_CONFIG`.
+
+## Mock Samsung TV
 
 `mocktv.py` acts as a Samsung Tizen TV so the driver can be exercised on a hub without one: REST
 and websocket on 8001, secure websocket on 8002, Wake-on-LAN on UDP 9 and 7. Its replies follow
