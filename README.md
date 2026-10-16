@@ -39,6 +39,8 @@ After updating, open each TV device and click Save Preferences.
   the driver never opened the art channel, so `artModeStatus` stayed `none`. `KEY_POWER` remains the
   fallback for a Frame that doesn't answer on it.
 - A late close report from a replaced socket no longer marks the new one closed.
+- New preference: trace logging of the TV's messages (token masked) for 30 minutes. The tester in
+  [`tests/`](tests/README.md) reads it.
 
 ### 2.4.2
 

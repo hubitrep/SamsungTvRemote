@@ -49,6 +49,9 @@ metadata {
 			input ("infoLog", "bool", 
 				   title: "Enable information logging " + helpLogo(),
 				   defaultValue: true)
+			input ("traceLog", "bool",
+				   title: "Enable trace logging of the TV's messages for 30 minutes (for the tester and support)",
+				   defaultValue: false)
 			stPreferences()
 		}
 		input ("pollInterval","enum", title: "Power Polling Interval (seconds)",
@@ -94,7 +97,7 @@ def updated() {
 			updateDataValue("driverVersion", driverVer())
 			updStatus << [driverVer: driverVer()]
 		}
-		if (logEnable) { runIn(1800, debugLogOff) }
+		if (logEnable || traceLog) { runIn(1800, debugLogOff) }
 		updStatus << [logEnable: logEnable, infoLog: infoLog]
 		updStatus << [setOnPollInterval: setOnPollInterval()]
 		sendEvent(name: "numberOfButtons", value: 60)
@@ -187,7 +190,7 @@ def onPoll() {
 		uri: "http://${deviceIp}:8001/api/v2/",
 		timeout: 6
 	]
-	asynchttpGet("onPollParse", sendCmdParams)
+	asynchttpGet("onPollParse", sendCmdParams, [sentAt: now()])
 	//	after a reboot the attribute still says open; the in-memory socket state does not
 	if (ws().phase == "closed" && device.currentValue("wsStatus") == "open") {
 		sendEvent(name: "wsStatus", value: "closed")
@@ -210,6 +213,18 @@ def updateDriver() {
 }
 
 def onPollParse(resp, data) {
+	if (traceLog) {
+		String keys = ""
+		String ps = "-"
+		if (resp.status == 200) {
+			try {
+				Map d = new JsonSlurper().parseText(resp.data)?.device
+				keys = d ? d.keySet().sort().join(",") : ""
+				ps = d?.containsKey("PowerState") ? d.PowerState : "absent"
+			} catch (e) { keys = "unparsable" }
+		}
+		logTrace("rest: status=${resp.status} ms=${data?.sentAt ? now() - data.sentAt : '?'} PowerState=${ps} keys=${keys}")
+	}
 	def powerState = "NC"
 	def onOff = "off"
 	Map info = null
@@ -314,6 +329,7 @@ def on() {
 }
 
 def sendWol() {
+	logTrace("wol: sent")
 	def wolMac = getDataValue("alternateWolMac")
 	def cmd = "FFFFFFFFFFFF$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac$wolMac"
 	//	send to both WoL ports (9 and 7)
@@ -785,6 +801,7 @@ def armIdleClose() {
 }
 
 def execMessage(data) {
+	logTrace("tx ${ws().funct}: ${data}")
 	interfaces.webSocket.sendMessage(data)
 }
 
@@ -837,6 +854,7 @@ def close() {
 def webSocketStatus(message) {
 	Map s = ws()
 	Map logData = [method: "webSocketStatus", message: message, funct: s.funct]
+	logTrace("ws ${s.funct}: ${message}")
 	if (message.startsWith("status: open")) {
 		s.phase = "open"
 		s.connectingAt = null
@@ -941,6 +959,7 @@ def probeOpened() { setPowerState("on", [method: "probePower", powerState: "abse
 def probeFailed() { setPowerState("off", [method: "probePower", powerState: "absent/wsFailed"]) }
 
 def parse(resp) {
+	logTrace("rx ${ws().funct}: ${maskToken(resp)}")
 	def logData = [method: "parse"]
 	try {
 		resp = parseJson(resp)
@@ -1047,6 +1066,7 @@ def appOpenByName(appName) {
 			//	the TV answers a bare true (rejected by the default JSON parser) after about 6 s
 			httpPost([uri: uri, body: "", textParser: true, timeout: 15]) { resp ->
 				logData << [status: resp.status, data: resp.data?.text?.trim(), success: resp.success]
+				logTrace("app: POST ${appId} status=${resp.status} body=${logData.data}")
 				if (resp.status == 200) {
 					if (stConnected()) { runIn(10, deviceRefresh) }
 					sendEvent(name: "appName", value: appName)
@@ -1083,6 +1103,7 @@ def appClose(appId = device.currentValue("appId")) {
 }
 
 def appCloseParse(resp, data) {
+	logTrace("app: DELETE ${data.appId} status=${resp.status} body=${resp.status == 200 ? resp.data : ''}")
 	Map logData = [method: "appCloseParse", data: data]
 	if (resp.status == 200 && resp.json == true) {
 		logData << [status: resp.status, success: resp.json]
@@ -1816,7 +1837,14 @@ def version() { return "2.4.2" }
 
 def label() { return device.displayName + "-${version()}" }
 
-def logTrace(msg){ log.trace "${label()}: ${msg}" }
+def logTrace(msg) {
+	if (traceLog) { log.trace "${label()}: ${msg}" }
+}
+
+//	trace lines carry protocol text; the token never goes into a log
+String maskToken(String s) {
+	return s?.replaceAll(/"token"\s*:\s*"?[^",}]*"?/, '"token":"<token>"')
+}
 
 def logInfo(msg) { 
 	if (infoLog != false) { log.info "${label()}: ${msg}" }		//	unset counts as on
@@ -1824,7 +1852,8 @@ def logInfo(msg) {
 
 def debugLogOff() {
 	device.updateSetting("logEnable", [type:"bool", value: false])
-	logWarn("debug logging turned off")
+	device.updateSetting("traceLog", [type:"bool", value: false])
+	logWarn("debug and trace logging turned off")
 }
 
 def logDebug(msg) {
