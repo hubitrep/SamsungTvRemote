@@ -14,7 +14,6 @@ Support thread: [Samsung Hubitat TV Integration](https://community.hubitat.com/t
   `https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/packageManifest.json`.
 - **Manually:** Drivers Code → New Driver → Import, with
   `https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVRemote.groovy`.
-- **Bundle:** [SamsungTVRemote.zip](SamsungTVRemote.zip) holds the same code as separate libraries.
 
 Then follow Dave's [installation guide](Docs/Installation.pdf).
 
@@ -26,6 +25,8 @@ working and nothing has to be recreated.
 - **Installed with HPM:** in HPM, Unmatch Dave's package, then Match Up and pick
   "Samsung TV Remote (hubitrep)", then Repair it to download the code.
 - **Installed by hand:** open the driver in Drivers Code, Import from the URL above, and Save.
+- **Installed from Dave's bundle:** import the driver as above. The `davegut` libraries the bundle
+  added to Libraries Code are no longer used by this driver.
 
 After updating, open each TV device and click Save Preferences.
 
@@ -110,12 +111,6 @@ The Frame and SmartThings changes are untested on hardware.
 - Fixes: `appData` NPE, the app-launch request body, and four preset defects.
 - New command `getInstalledApps`, a diagnostic that asks the TV for its app list and logs the reply.
   Some TVs do not answer it.
-
-## Source layout
-
-`src/` holds the driver core and its libraries, as in Dave's bundle. `python3 flatten.py` builds
-`SamsungTVRemote.groovy` (the single-file driver, in the format Hubitat produces for a driver with
-`#include`s) and `SamsungTVRemote.zip` from them. Edit `src/`, never the generated files.
 
 ## Dave's documentation
 
