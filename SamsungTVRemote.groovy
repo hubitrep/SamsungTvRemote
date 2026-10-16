@@ -418,7 +418,8 @@ def setVariable(valueString) {
 }
 
 def refresh() {
-	checkDriverVersion()
+	//	Refresh updates the switch too, not only the SmartThings attributes
+	onPoll()
 	if (stConnected()) {
 		deviceRefresh()
 	}
@@ -861,8 +862,11 @@ def webSocketStatus(message) {
 		s.phase = "open"
 		s.connectingAt = null
 		sendEvent(name: "wsStatus", value: "open")
-		//	the TV normally confirms at once with ms.channel.connect
-		runIn(3, wsReadyTimeout)
+		//	the TV normally confirms at once with ms.channel.connect; without a token it first shows
+		//	the allow dialog and confirms when someone answers it, so keys must wait for that
+		boolean pairing = s.funct == "remote" && getDataValue("tokenSupport") == "true" &&
+			(state.token == null || state.token == "12345678")
+		runIn(pairing ? 30 : 3, wsReadyTimeout)
 	} else if (message.startsWith("status: closing")) {
 		//	a Frame finishing a late art reply can take 10 s to complete the close
 		List pending = ((s.pendingClose ?: []) as List).findAll { now() - (it as Long) < 15000 }

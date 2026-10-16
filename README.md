@@ -39,6 +39,9 @@ After updating, open each TV device and click Save Preferences.
   the driver never opened the art channel, so `artModeStatus` stayed `none`. `KEY_POWER` remains the
   fallback for a Frame that doesn't answer on it.
 - A late close report from a replaced socket no longer marks the new one closed.
+- Refresh also polls the TV's power state; before, it only refreshed SmartThings attributes.
+- While the TV shows its "allow" dialog for a new connection, keys wait up to 30 s for the TV's
+  answer instead of going out after 3 s and being lost.
 - New preference: trace logging of the TV's messages (token masked) for 30 minutes. The tester in
   [`tests/`](tests/README.md) reads it.
 
