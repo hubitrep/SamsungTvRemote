@@ -1784,37 +1784,11 @@ def setTvChannel(newChannel) {
 	deviceCommand(cmdData)
 }
 
-// ===== Common Logging and info gathering Methods (Logging) =====
-
-def nameSpace() { return "davegut" }
+// ===== Logging =====
 
 def version() { return "2.4.2" }
 
-def label() {
-	if (device) { 
-		return device.displayName + "-${version()}"
-	} else { 
-		return app.getLabel() + "-${version()}"
-	}
-}
-
-def listAttributes() {
-	def attrData = device.getCurrentStates()
-	Map attrs = [:]
-	attrData.each {
-		attrs << ["${it.name}": it.value]
-	}
-	return attrs
-}
-
-def setLogsOff() {
-	def logData = [logEnable: logEnable]
-	if (logEnable) {
-		runIn(1800, debugLogOff)
-		logData << [debugLogOff: "scheduled"]
-	}
-	return logData
-}
+def label() { return device.displayName + "-${version()}" }
 
 def logTrace(msg){ log.trace "${label()}: ${msg}" }
 
@@ -1823,12 +1797,8 @@ def logInfo(msg) {
 }
 
 def debugLogOff() {
-	if (device) {
-		device.updateSetting("logEnable", [type:"bool", value: false])
-	} else {
-		app.updateSetting("logEnable", false)
-	}
-	logInfo("debugLogOff")
+	device.updateSetting("logEnable", [type:"bool", value: false])
+	logWarn("debug logging turned off")
 }
 
 def logDebug(msg) {
