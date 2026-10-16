@@ -6,7 +6,7 @@ provide.
 
 Based on [Dave Gutheinz's Samsung TV Remote](https://github.com/DaveGut/HubitatActive/tree/master/SamsungTvRemote),
 with his agreement; the changes below are on top of his 2.3.9b. Thank you, Dave, for the driver.
-Support thread: [Samsung Hubitat TV Integration](https://community.hubitat.com/t/samsung-hubitat-tv-integration-2016-and-later/55120).
+Support thread: [[BETA] Samsung TV Remote (2016 and later TVs)](https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829).
 
 ## Install
 

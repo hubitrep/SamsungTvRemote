@@ -4,7 +4,7 @@
   "version": "2.4.3",
   "minimumHEVersion": "2.3.9",
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
-  "communityLink": "https://community.hubitat.com/t/samsung-hubitat-tv-integration-2016-and-later/55120",
+  "communityLink": "https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829",
   "dateReleased": "2026-10-15",
   "releaseNotes": "Beta. Frame TVs: art mode is read and set over the art channel (it never worked before). Refresh reads the power state. Keys wait for the TV's allow prompt on a new connection. New trace logging preference. New optional app: Samsung TV Remote Tester, which reports how your TV differs from what the driver expects. Full list in the README.",
   "drivers": [
