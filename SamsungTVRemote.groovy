@@ -291,6 +291,8 @@ def setPowerState(onOff, Map logData) {
 		} else {
 			setPowerOffMode()
 		}
+		//	switch and art mode are separate: 2025 Frames report PowerState standby while showing art
+		if (getDataValue("frameTv") == "true") { runIn(6, getArtModeStatus) }
 	}
 	if (onOff == "on") { state.powerOnAt = null }
 	logDebug(logData)
@@ -589,16 +591,20 @@ def artMode() {
 	logInfo("artMode: ${logData}")
 }
 
-def getArtModeStatus() {
+//	a reply on the art channel sets state.artModeWs; until then artMode() falls back to KEY_POWER
+def getArtModeStatus(Map retry = null) {
 	if (getDataValue("frameTv") == "true") {
-		if (state.artModeWs) {
-			def data = [request:"get_artmode_status",
-						id: "${getDataValue("uuid")}"]
-			data = JsonOutput.toJson(data)
-			artModeCmd(data)
-		} else {
-			refresh()
+		//	replacing a remote socket mid-handshake would drop its queued keys
+		Map s = ws()
+		int tries = retry?.tries ?: 0
+		if (s.funct == "remote" && s.phase in ["connecting", "open"] && tries < 5) {
+			runIn(3, getArtModeStatus, [data: [tries: tries + 1]])
+			return
 		}
+		def data = [request:"get_artmode_status",
+					id: "${getDataValue("uuid")}"]
+		data = JsonOutput.toJson(data)
+		artModeCmd(data)
 	}
 }
 
@@ -609,6 +615,13 @@ def artModeCmd(data) {
 						   event:"art_app_request"]]
 	cmdData = JsonOutput.toJson(cmdData)
 	sendMessage("frameArt", cmdData)
+	//	the open art socket blocks the remote channel and the power probe
+	runIn(15, closeArt)
+}
+
+def closeArt() {
+	Map s = ws()
+	if (s.funct == "frameArt" && s.phase != "closed") { close() }
 }
 
 def ambientMode() {
@@ -810,6 +823,8 @@ def connect(funct) {
 def close() {
 	logDebug("close")
 	Map s = ws()
+	//	the transport reports closing later, possibly after a replacement socket is up
+	if (s.phase != "closed") { s.closedAt = now() }
 	s.phase = "closed"
 	s.queue = []
 	s.holdAt = null
@@ -829,8 +844,11 @@ def webSocketStatus(message) {
 		//	the TV normally confirms at once with ms.channel.connect
 		runIn(3, wsReadyTimeout)
 	} else if (message.startsWith("status: closing")) {
-		//	a socket being replaced reports closing after the new connect started
-		if (s.phase != "connecting") {
+		if (s.closedAt && now() - s.closedAt < 3000) {
+			//	the socket close() shut, not the current one
+			s.closedAt = null
+			logData << [action: "ignored"]
+		} else if (s.phase != "connecting") {
 			s.phase = "closed"
 			s.queue = []
 			s.holdAt = null
@@ -848,6 +866,10 @@ def webSocketStatus(message) {
 
 def wsFailed() {
 	Map s = ws()
+	//	no art channel: nothing is on screen
+	if (s.funct == "frameArt" && state.artModeWs && device.currentValue("artModeStatus") == "on") {
+		sendEvent(name: "artModeStatus", value: "off")
+	}
 	//	only a remote-socket failure indicates TV power state
 	if (s.funct == "remote") {
 		state.lastWsFailure = now()
@@ -931,7 +953,11 @@ def parse(resp) {
 					state.token = newToken
 					logData << [TOKEN: "updated"]
 				}
-				wsReady()
+				//	the art channel takes requests only after ms.channel.ready
+				if (ws().funct != "frameArt") { wsReady() }
+				break
+			case "ms.channel.ready":
+				if (ws().funct == "frameArt") { wsReady() }
 				break
 			case "ms.channel.timeOut":
 				//	connected, but the TV did not confirm: it is asleep
@@ -952,6 +978,7 @@ def parse(resp) {
 					sendEvent(name: "artModeStatus", value: status)
 					logData << [artModeStatus: status]
 					state.artModeWs = true
+					runIn(2, closeArt)
 				}
 				break
 			case "ed.installedApp.get":
@@ -973,7 +1000,6 @@ def parse(resp) {
 				logWarn(logData)
 				break
 			case "ms.error":
-			case "ms.channel.ready":
 			case "ms.channel.clientConnect":
 			case "ms.channel.clientDisconnect":
 			case "ms.remote.touchEnable":

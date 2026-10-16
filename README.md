@@ -32,6 +32,14 @@ After updating, open each TV device and click Save Preferences.
 
 ## Changes
 
+### Unreleased
+
+- Frame TVs: `artModeStatus` is read over the art channel at configure, after each power change and
+  after `artMode`, and `artMode` sets art mode there instead of sending a blind `KEY_POWER`. Before,
+  the driver never opened the art channel, so `artModeStatus` stayed `none`. `KEY_POWER` remains the
+  fallback for a Frame that doesn't answer on it.
+- A late close report from a replaced socket no longer marks the new one closed.
+
 ### 2.4.2
 
 - With SmartThings, `inputSource` reads and sets the input through `samsungvd.mediaInputSource`
