@@ -22,18 +22,22 @@ Then follow Dave's [installation guide](Docs/Installation.pdf).
 The driver keeps its name (`Samsung TV Remote`) and namespace (`davegut`), so existing devices keep
 working and nothing has to be recreated.
 
-- **Installed with HPM:** in HPM, Unmatch Dave's package, then Match Up and pick
-  "Samsung TV Remote (hubitrep)", then Repair it to download the code.
+- **Installed with HPM:**
+  1. **Package Manager Settings** → **Un-Match a Package** → **Remove a Matched Package**: pick
+     "Samsung TV Remote" (Dave's package).
+  2. **Match Up**: pick "Samsung TV Remote (hubitrep)".
+  3. **Repair**: pick "Samsung TV Remote (hubitrep)" to download the code.
 - **Installed by hand:** open the driver in Drivers Code, Import from the URL above, and Save.
 - **Installed from Dave's bundle:** import the driver as above. The `davegut` libraries the bundle
   added to Libraries Code are no longer used by this driver.
 
-After updating, open each TV device and click Save Preferences.
+Each TV device updates itself at its next power poll; its settings are kept.
 
 ## Tester
 
 The optional **Samsung TV Remote Tester** app runs the driver through a set of tests on your TV and
-writes a report to paste in the support thread. See [tests/README.md](tests/README.md).
+writes a report to paste in the support thread. See [tests/README.md](tests/README.md). With HPM, add
+it to an installed package with **Modify**.
 
 ## Changes
 
