@@ -1,0 +1,8 @@
+{
+  "_source": "2024 Frame (QA65LS03D): the set_artmode_status reply trails the art_mode_changed broadcast by 10-13 s (ha-samsungtv-smart, test_set_artmode_reply_not_status.py, issue #264); PowerState stays on while showing art (release notes 8.3.0); a token on the art channel stalls the handshake into ms.channel.timeOut (samsungws.py). deviceInfo.model is made up: no report gives a Frame's platform string.",
+  "deviceInfo": {"FrameTVSupport": "true", "model": "24_PONTUSM_FTV", "modelName": "QA65LS03D", "VoiceSupport": "true"},
+  "isSupport": {"FrameTVSupport": "true", "remote_voiceControl": "true"},
+  "setReply": "after broadcast",
+  "powerStateInArt": "on",
+  "artTokenStalls": true
+}

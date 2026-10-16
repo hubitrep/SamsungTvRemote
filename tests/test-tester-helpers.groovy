@@ -38,11 +38,14 @@ List<String> SIGNATURES = [
     'Map evalDeviceInfo(List<Map> lines, String powerStateReported) {',
     'Map evalRemoteSocket(List<Map> lines, List<Map> events, TimeZone tz) {',
     'Map evalBurst(List<Map> lines) {',
-    'Map evalPowerOff(List<Map> lines, List<Map> events, Map steps, Long startMs) {',
+    'Map evalPowerOff(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz, boolean alreadyOff) {',
     'Map evalPowerOn(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz) {',
     'Map evalStandby(List<Map> lines, List<Map> events) {',
     'Map evalArt(List<Map> lines, List<Map> events) {',
-    'Map evalApps(List<Map> lines, List<Map> events) {',
+    'Map evalApps(List<Map> lines, List<Map> events, Map steps) {',
+    'Map deviceInfoFields(Map info, List keys) {',
+    'String otherMessages(List<Map> lines, List known, List knownArt) {',
+    'List<String> sampleLines(int test, List<Map> lines) {',
     'Map evalAppList(List<Map> lines) {',
     'boolean runStalled(Map run, long nowMs) {',
     'Map splitDiffs(List diffs, Map expect) {',
@@ -51,9 +54,10 @@ List<String> SIGNATURES = [
     'List<Map> testRows(Map run, Map names) {',
     'List<String> differences(Map fields, Map expect) {',
     'String formatReport(Map header, List<Map> results) {',
+    'Map profileFields(List<Map> results) {',
     'int pollGap(int timeoutS, Long lastReadMs) {',
 ]
-String IMPORTS = "import groovy.json.JsonSlurper\nimport java.text.SimpleDateFormat\n"
+String IMPORTS = "import groovy.json.JsonOutput\nimport groovy.json.JsonSlurper\nimport java.text.SimpleDateFormat\n"
 def h = new GroovyShell().parse(IMPORTS + SIGNATURES.collect { extract(text, it) }.join("\n") + "\nreturn this\n").run()
 
 int pass = 0, fail = 0
@@ -128,20 +132,23 @@ Map r2 = h.evalRemoteSocket(rs, [[name: 'wsStatus', value: 'open', at: 1L]], utc
 check 'handshake and time', r2.handshake == 'ms.channel.connect' && r2.connectMs == 2047L
 check 'token and key', r2.tokenInReply == true && r2.keySent == true && r2.openEvent == true
 Map r3 = h.evalRemoteSocket([line('20:57:55.661', 'ws remote: status: open'), line('20:57:57.000', 'rx remote: {"event": "ms.channel.unauthorized"}')], [], utc)
-check 'refused', r3.handshake == 'ms.channel.unauthorized' && r3.keySent == false
+check 'refused: key not judged', r3.handshake == 'ms.channel.unauthorized' && !r3.containsKey('keySent')
 
 println 'evalBurst'
 List<Map> kb = [line('1:00:00.000', 'ws remote: status: open')] + (1..3).collect { line('1:00:01.000', 'tx remote: {"DataOfCmd":"KEY_HOME"}') }
 check 'one open, three keys', h.evalBurst(kb) == [opens: 1, keysSent: 3]
 
 println 'evalPowerOff'
-long t0 = 1000L
+long t0 = h.tsMs('2026-10-15 20:31:20.000', utc)
 List<Map> evOff = [[name: 'switch', value: 'off', at: 2000L], [name: 'switch', value: 'off', at: 12000L]]
-Map po = h.evalPowerOff([line('20:31:23.000', 'rest: status=408 ms=6000 PowerState=- keys=')], evOff, [off: [ok: true, ms: 1200L]], t0)
-check 'off, no flap, REST stopped', po.offEvent && po.noFlap && po.offMs == 1200L && po.wentAway == 'REST stopped'
+Map po = h.evalPowerOff([line('20:31:23.000', 'rest: status=408 ms=6000 PowerState=- keys=')], evOff, [off: [ok: true, ms: 1200L]], t0, utc, false)
+check 'off, no flap, REST stopped', po.offEvent && po.noFlap && po.offMs == 1200L && po.wentAway == 'REST stopped' && po.restAfterOffS == 0L
 Map po2 = h.evalPowerOff([line('20:31:23.000', 'rest: status=200 ms=30 PowerState=standby keys=OS')],
-                         evOff + [[name: 'switch', value: 'on', at: 13000L]], [off: [ok: true, ms: 1200L]], t0)
-check 'flap and standby seen', !po2.noFlap && po2.wentAway == 'PowerState standby'
+                         evOff + [[name: 'switch', value: 'on', at: 13000L]], [off: [ok: true, ms: 1200L]], t0, utc, false)
+check 'flap and standby seen', !po2.noFlap && po2.wentAway == 'PowerState standby' && po2.restAfterOffS == 3L
+
+Map po3 = h.evalPowerOff([], evOff, [off: [ok: true, ms: 300L]], t0, utc, true)
+check 'already off: no offMs', po3.alreadyOff == true && !po3.containsKey('offMs')
 
 println 'evalPowerOn'
 Map pn = h.evalPowerOn([line('20:26:36.500', 'wol: sent'), line('20:26:46.500', 'wol: sent'),
@@ -162,7 +169,12 @@ String compact = 'rx frameArt: {"data":"{\\"event\\":\\"artmode_status\\",\\"val
 List<Map> art = [line('20:57:53.600', 'rx frameArt: {"data": {}, "event": "ms.channel.ready"}'), line('20:57:53.642', status),
                  line('20:58:06.444', 'tx frameArt: {"params":{"data":"{\\"value\\":\\"on\\",\\"request\\":\\"set_artmode_status\\"}"}}')]
 Map a = h.evalArt(art, [[name: 'artModeStatus', value: 'on', at: 1L]])
-check 'ready, status, event, set over art', a.artReady && a.statusReply == 'on' && a.statusEventMatches && a.setVia == 'art channel'
+check 'ready, status, event, set over art', a.artReady && a.statusReply == 'on' && a.statusEventMatches && a.setVia == 'art channel' && a.setReply == 'none'
+String setRep = 'rx frameArt: {"data": "{\\"event\\": \\"set_artmode_status\\", \\"status\\": \\"on\\"}", "event": "d2d_service_message"}'
+String cast = 'rx frameArt: {"data": "{\\"event\\": \\"art_mode_changed\\", \\"status\\": \\"on\\"}", "event": "d2d_service_message"}'
+check 'set reply before broadcast', h.evalArt([line('1:00:00.000', setRep), line('1:00:00.100', cast)], []).setReply == 'before broadcast'
+check 'set reply after broadcast', h.evalArt([line('1:00:00.000', cast), line('1:00:10.000', setRep)], []).setReply == 'after broadcast'
+check 'broadcast without a reply', h.evalArt([line('1:00:00.000', cast)], []).setReply == 'not seen'
 check 'compact JSON', h.evalArt([line('1:00:00.000', compact)], [[name: 'artModeStatus', value: 'off', at: 1L]]).statusReply == 'off'
 Map a2 = h.evalArt([line('1:00:00.000', status), line('1:00:01.000', 'tx remote: {"DataOfCmd":"KEY_POWER"}')], [])
 check 'no event for the reply; blind key', !a2.statusEventMatches && a2.setVia == 'power key' && !a2.artReady
@@ -170,18 +182,43 @@ check 'no event for the reply; blind key', !a2.statusEventMatches && a2.setVia =
 println 'evalApps'
 Map ap = h.evalApps([line('1:00:00.000', 'app: POST 111299001912 status=200 body=true'),
                      line('1:00:06.000', 'app: DELETE 111299001912 status=200 body=true')],
-                    [[name: 'appName', value: 'YouTube', at: 1L], [name: 'appName', value: ' ', at: 2L]])
-check 'launch and close', ap == [launchStatus: 200, closeStatus: 200, closeBody: 'true', appEvent: true, closeEvent: true]
+                    [[name: 'appName', value: 'YouTube', at: 1L], [name: 'appName', value: ' ', at: 2L]], [launch: [ok: true, ms: 6100L]])
+check 'launch and close', ap == [launchStatus: 200, launchMs: 6100L, closeStatus: 200, closeBody: 'true', appEvent: true, closeEvent: true]
 
 println 'evalAppList'
 Map al = h.evalAppList([line('1:00:00.000', 'rx remote: {"data": {"data": [{"appId": "1", "name": "YouTube"}, {"appId": "2", "name": "Deezer"}]}, "event": "ed.installedApp.get", "from": "host"}')])
 check 'answered with a count', al == [answered: true, apps: 2]
 check 'not answered', h.evalAppList([]) == [answered: false, apps: null]
 
+println 'deviceInfoFields'
+Map fi = h.deviceInfoFields([device: [OS: 'Tizen', duid: 'uuid:x', wifiMac: 'f4:7b:09:12:34:56', PowerState: 'on'], version: '2.0.25',
+                             isSupport: '{"remote_voiceControl":"false"}\n'], ['OS', 'PowerState', 'VoiceSupport'])
+check 'allowlisted values only', fi.deviceInfo == [OS: 'Tizen', PowerState: 'on']
+check 'isSupport parsed, version, all key names', fi.isSupport == [remote_voiceControl: 'false'] && fi.apiVersion == '2.0.25' && fi.deviceKeys == 'OS,PowerState,duid,wifiMac'
+check 'no reply', h.deviceInfoFields([status: 'no answer'], ['OS']).deviceInfo == [:]
+
+println 'otherMessages'
+List known = ['ms.channel.connect', 'd2d_service_message', 'ed.installedApp.get']
+List kart = ['artmode_status']
+List<Map> om = [line('1:00:00.000', 'rx remote: {"data": {"clients": []}, "event": "ms.channel.connect"}'),
+                line('1:00:01.000', 'rx remote: {"data": {"message": "x"}, "event": "ms.error"}'),
+                line('1:00:02.000', 'rx remote: {"data": {}, "event": "ed.edenTV.update"}'),
+                line('1:00:03.000', status),
+                line('1:00:04.000', 'rx frameArt: {"data": "{\\"event\\": \\"image_selected\\"}", "event": "d2d_service_message"}'),
+                line('1:00:05.000', 'rx remote: {"data": {"message": "y"}, "event": "ms.error"}')]
+check 'unknown outer and art events, once each', h.otherMessages(om, known, kart) == 'ms.error,ed.edenTV.update,art:image_selected'
+check 'none', h.otherMessages(om.take(1), known, kart) == ''
+
+println 'sampleLines'
+check 'handshake kept and masked', h.sampleLines(2, rs) == ['20:57:57.708 rx remote: {"data": {"clients": [], "token":"<token>"}, "event": "ms.channel.connect"}']
+check 'no samples for key burst', h.sampleLines(3, kb) == []
+
 println 'differences and verdicts'
 Map expect = [a: [eq: true], b: [max: 100, driver: true], c: [ne: null]]
 List diffs = h.differences([a: false, b: 200, c: null], expect)
 check 'all three differ', diffs == ['a', 'b', 'c']
+check 'optional rule skips an unmeasured field', h.differences([a: 1], [k: [eq: true, optional: true]]) == [] && h.differences([k: false], [k: [eq: true, optional: true]]) == ['k']
+check 'none rule', h.differences([o: ''], [o: [none: true]]) == [] && h.differences([:], [o: [none: true]]) == [] && h.differences([o: 'ms.error'], [o: [none: true]]) == ['o']
 Map split = h.splitDiffs(diffs, expect)
 check 'split', split.driverDiffs == ['b'] && split.tvDiffs == ['a', 'c']
 check 'verdict driver', h.verdictOf([diffs: diffs] + split) == 'driver'
@@ -204,8 +241,18 @@ String rep = h.formatReport([appVersion: '0.1.0', driverVersion: '2.4.2', firmwa
                              powerStateReported: 'true', smartThings: false, pollS: 60, slowestReadMs: 120, status: 'done'],
                             [[test: 9, name: 'App list', observed: [answered: false, apps: null], diffs: ['answered'], driverDiffs: [], tvDiffs: ['answered'],
                               trace: ['20:58:00.000 tx remote: {}']]])
-check 'header', rep.contains('TV: UN50TU7000FXZC · platform 20_KANTSU2_UHD_BASIC') && rep.contains('SmartThings not linked')
+check 'header', rep.contains('TV: UN50TU7000FXZC · platform 20_KANTSU2_UHD_BASIC') && rep.contains('SmartThings setting off')
 check 'test line and trace', rep.contains('9. App list — TV differs (answered)') && rep.contains('     20:58:00.000 tx remote: {}')
+
+println 'profileFields'
+Map pf = h.profileFields([[test: 1, observed: [deviceInfo: [OS: 'Tizen'], apiVersion: '2.0.25', restMs: 20]],
+                          [test: 2, observed: [handshake: 'ms.channel.connect', connectMs: 1352, otherMessages: 'ms.error']],
+                          [test: 7, skipped: 'not a Frame TV'],
+                          [test: 9, observed: [answered: false, apps: null, otherMessages: 'ms.error,ed.edenTV.update']]])
+check 'profile keys only, otherMessages merged', pf == [deviceInfo: [OS: 'Tizen'], apiVersion: '2.0.25', handshake: 'ms.channel.connect',
+    connectMs: 1352, answered: false, apps: null, otherMessages: 'ms.error,ed.edenTV.update']
+String rep2 = h.formatReport([appVersion: '0.2.0', status: 'done'], [[test: 1, name: 'Device info', observed: [deviceInfo: [OS: 'Tizen']], diffs: []]])
+check 'maps as JSON, profile block', rep2.contains('deviceInfo={"OS":"Tizen"}') && rep2.contains('mock profile (for the maintainer):') && rep2.contains('"OS": "Tizen"')
 
 println 'pollGap'
 check 'short wait: 1 s', h.pollGap(15, 400L) == 1

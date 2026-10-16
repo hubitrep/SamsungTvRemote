@@ -1,0 +1,6 @@
+{
+  "_source": "A TU7000-like TV after a firmware update that drops PowerState and keeps answering REST in standby (forum reports of PowerState missing; the driver's 2.3.9m fallback). Constructed: not from a tester report.",
+  "deviceInfo": {"PowerState": null},
+  "wentAway": "socket timeout",
+  "probeReply": "ms.channel.timeOut"
+}

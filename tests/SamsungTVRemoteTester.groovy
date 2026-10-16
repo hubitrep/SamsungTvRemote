@@ -26,7 +26,7 @@ import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.text.SimpleDateFormat
 
-@Field static final String CODE_VERSION = "0.1.0"
+@Field static final String CODE_VERSION = "0.2.0"
 
 @Field static final String BUSY = "a run is in progress"
 
@@ -38,6 +38,17 @@ import java.text.SimpleDateFormat
 // Run order: power last, so the TV ends on, and art mode before it, so the power cycle resets art mode.
 @Field static final List<Integer> ORDER = [1, 2, 3, 8, 9, 7, 4, 6, 5]
 
+// Device info fields that describe the model, not the user; the rest (ids, names, addresses) stay out of the report.
+@Field static final List DEVICE_INFO_KEYS = ["FrameTVSupport", "GamePadSupport", "ImeSyncedSupport", "Language", "OS", "PowerState",
+    "TokenAuthSupport", "VoiceSupport", "WallScreenRatio", "WallService", "description", "developerMode", "firmwareVersion",
+    "model", "modelName", "networkType", "resolution", "smartHubAgreement", "type"]
+
+// Events the driver acts on or deliberately ignores; anything else the TV sends is reported as otherMessages.
+@Field static final List KNOWN_EVENTS = ["ms.channel.connect", "ms.channel.timeOut", "ms.channel.unauthorized", "ms.channel.ready",
+    "d2d_service_message", "ed.installedApp.get", "ms.channel.clientConnect", "ms.channel.clientDisconnect",
+    "ms.remote.touchEnable", "ms.remote.touchDisable"]
+@Field static final List KNOWN_ART_EVENTS = ["artmode_status", "art_mode_changed", "set_artmode_status"]
+
 // The device's attributes the run watches, to check what the driver made of the TV's messages.
 @Field static final List TV_ATTRIBUTES = ["switch", "wsStatus", "artModeStatus", "appName", "appId"]
 
@@ -47,17 +58,17 @@ import java.text.SimpleDateFormat
 @Field static final Map EXPECT = [
     0: [reachable: [eq: true]],
     1: [restStatus: [eq: 200], restMs: [max: 6000], powerStateReported: [eq: true]],
-    2: [handshake: [eq: "ms.channel.connect"], connectMs: [max: 5000], keySent: [eq: true, driver: true],
-        openEvent: [eq: true, driver: true]],
-    3: [opens: [eq: 1, driver: true], keysSent: [eq: 3, driver: true]],
-    4: [offEvent: [eq: true, driver: true], noFlap: [eq: true, driver: true], offMs: [max: 30000]],
+    2: [handshake: [eq: "ms.channel.connect"], connectMs: [max: 5000], keySent: [eq: true, driver: true, optional: true],
+        openEvent: [eq: true, driver: true], otherMessages: [none: true]],
+    3: [opens: [eq: 1, driver: true], keysSent: [eq: 3, driver: true], otherMessages: [none: true]],
+    4: [offEvent: [eq: true, driver: true], noFlap: [eq: true, driver: true], offMs: [max: 30000, optional: true]],
     5: [onEvent: [eq: true, driver: true], onMs: [max: 45000]],
     6: [probeReply: [eq: "ms.channel.timeOut"], stayedOff: [eq: true, driver: true]],
     7: [artReady: [eq: true], statusReply: [ne: null], statusEventMatches: [eq: true, driver: true],
-        setVia: [eq: "art channel", driver: true]],
+        setVia: [eq: "art channel", driver: true], otherMessages: [none: true]],
     8: [launchStatus: [eq: 200], closeStatus: [eq: 200], closeBody: [eq: "true"],
         appEvent: [eq: true, driver: true], closeEvent: [eq: true, driver: true]],
-    9: [answered: [eq: true]]
+    9: [answered: [eq: true], otherMessages: [none: true]]
 ]
 
 
@@ -352,6 +363,8 @@ void runStep() {
             run.testSince = nowTs()
             run.testStartMs = now()
             run.stepResults = [:]
+            // A 2025 Frame showing art reports standby, so its switch can read off before off() is sent.
+            if (test == 4) run.ctx.alreadyOff = tv.currentValue("switch") == "off"
             String skip = skipReason(test, run)
             if (skip) {
                 (run.results as List) << [test: test, name: TEST_NAMES[test], skipped: skip]
@@ -384,6 +397,8 @@ private void advance(Map run) {
 
 String skipReason(int test, Map run) {
     Map ctx = run.ctx as Map
+    // Keys and the power-off need the remote socket the TV just refused.
+    if (ctx.refused && test in [3, 4, 5, 6, 9]) return "the TV refused the remote connection (allow it on the TV, then run again)"
     switch (test) {
         case 6: return ctx.powerState ? "the TV reports PowerState, so the driver doesn't probe" : null
         case 7: return ctx.frame ? null : "not a Frame TV"
@@ -501,11 +516,32 @@ void finishTest() {
             return
         }
     } else {
+        // Device info and the art test read /api/v2/ directly: the driver's trace has only its key names.
+        Map info = (test in [1, 7]) ? fetchDeviceInfo() : null
+        run = state.run as Map
         Map r = evaluateTest(test, lines, steps, run, events)
+        if (test == 1 && info) r.observed = (r.observed as Map) + deviceInfoFields(info, DEVICE_INFO_KEYS)
+        if (test == 7 && info) r.observed = (r.observed as Map) + [powerStateInArt: (info.device as Map)?.PowerState ?: (info.status == 200 ? "absent" : "no answer")]
+        r.samples = sampleLines(test, lines)
+        if (test == 2 && (r.observed as Map)?.handshake == "ms.channel.unauthorized") run.ctx.refused = true
         if (test in ((run.traceOff ?: []) as List)) r.note = "trace logging was off for part of this test, so lines may be missing"
         (run.results as List) << r
     }
     advance(run)
+}
+
+private Map fetchDeviceInfo() {
+    Map out = [status: null]
+    try {
+        httpGet([uri: "http://${tv.getSetting('deviceIp')}:8001", path: "/api/v2/", timeout: 6]) { resp ->
+            out.status = resp.status
+            def d = resp.data
+            if (d instanceof Map) { out.device = d.device; out.version = d.version; out.isSupport = d.isSupport }
+        }
+    } catch (e) {
+        out.status = "no answer"
+    }
+    return out
 }
 
 Map evaluateTest(int test, List<Map> lines, Map steps, Map run, List<Map> events) {
@@ -516,14 +552,16 @@ Map evaluateTest(int test, List<Map> lines, Map steps, Map run, List<Map> events
         case 1: f = evalDeviceInfo(lines, tv.getDataValue("powerStateReported")); break
         case 2: f = evalRemoteSocket(lines, events, tz); break
         case 3: f = evalBurst(lines); break
-        case 4: f = evalPowerOff(lines, events, steps, run.testStartMs as Long); break
+        case 4: f = evalPowerOff(lines, events, steps, run.testStartMs as Long, tz, run.ctx.alreadyOff == true); break
         case 5: f = evalPowerOn(lines, events, steps, run.testStartMs as Long, tz); break
         case 6: f = evalStandby(lines, events); break
         case 7: f = evalArt(lines, events); break
-        case 8: f = evalApps(lines, events); break
+        case 8: f = evalApps(lines, events, steps); break
         case 9: f = evalAppList(lines); break
         default: f = [:]
     }
+    String other = otherMessages(lines, KNOWN_EVENTS, KNOWN_ART_EVENTS)
+    if (other) f.otherMessages = other
     r.observed = f
     r.diffs = differences(f, EXPECT[test] as Map)
     r.putAll(splitDiffs(r.diffs as List, EXPECT[test] as Map))
@@ -544,7 +582,7 @@ List<Map> stepsFor(int test, Map run) {
         case 3: return [[name: "close", cmd: "close", after: 2],
                         [name: "burst", cmd: "burst", wait: '^tx remote: .*KEY_HOME', timeout: 15],
                         [name: "settle", sleep: 4]]
-        case 4: return [[name: "off", cmd: "off", wait: '^setPowerState: \\[switch: off\\]', timeout: poll + 20],
+        case 4: return [[name: "off", cmd: "off", wait: run.ctx.alreadyOff ? '^off: ' : '^setPowerState: \\[switch: off\\]', timeout: poll + 20],
                         [name: "hold", sleep: poll + 10]]
         case 5: return [[name: "on", cmd: "on", wait: '^setPowerState: \\[switch: on\\]', timeout: Math.max(60, poll + 30), after: 5]]
         case 6: return [[name: "probe", wait: '^rx remote: .*"ms\\.channel\\.timeOut"|^ws remote: (failure|status: open)', timeout: poll + 20],
@@ -760,8 +798,11 @@ Map evalRemoteSocket(List<Map> lines, List<Map> events, TimeZone tz) {
         if (m.find()) handshake = m.group(1)
     }
     Long ms = (open && reply) ? tsMs(reply.ts as String, tz) - tsMs(open.ts as String, tz) : null
-    return [handshake: handshake, connectMs: ms, tokenInReply: reply ? (reply.msg as String).contains('"token"') : null,
-            keySent: firstLine(lines, '^tx remote: .*KEY_HOME') != null, openEvent: hasEvent(events, "wsStatus", "open")]
+    Map f = [handshake: handshake, connectMs: ms, tokenInReply: reply ? (reply.msg as String).contains('"token"') : null,
+             openEvent: hasEvent(events, "wsStatus", "open")]
+    // A key can only go out after the TV accepted the connection.
+    if (handshake == "ms.channel.connect") f.keySent = firstLine(lines, '^tx remote: .*KEY_HOME') != null
+    return f
 }
 
 Map evalBurst(List<Map> lines) {
@@ -769,14 +810,20 @@ Map evalBurst(List<Map> lines) {
 }
 
 // How the TV went away after off: REST stopped answering, it reported standby, or its socket timed out.
-Map evalPowerOff(List<Map> lines, List<Map> events, Map steps, Long startMs) {
+Map evalPowerOff(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz, boolean alreadyOff) {
     List<String> how = []
     if (lines.any { (it.msg as String) =~ /^rest: status=(?!200)/ }) how << "REST stopped"
     if (lines.any { (it.msg as String) =~ /^rest: status=200 .*PowerState=standby/ }) how << "PowerState standby"
     if (lines.any { (it.msg as String) =~ /^rx remote: .*ms\.channel\.timeOut/ }) how << "socket timeout"
+    // The driver sends switch on every poll, so an off TV still produces off events.
     Map off = events.find { it.name == "switch" && it.value == "off" }
     boolean flap = off != null && events.any { it.name == "switch" && it.value == "on" && (it.at as Long) > (off.at as Long) }
-    return [offEvent: off != null, offMs: steps.off?.ok ? steps.off.ms : null, noFlap: !flap, wentAway: how ? how.join(", ") : "still answering"]
+    // The last answer after off, to the poll: how long the TV keeps answering REST once told to turn off.
+    Map last = lines.reverse().find { (it.msg as String).startsWith("rest: status=200") }
+    Long after = last ? Math.round((tsMs(last.ts as String, tz) - startMs) / 1000.0d) : 0L
+    Map f = [offEvent: off != null, noFlap: !flap, wentAway: how ? how.join(", ") : "still answering", restAfterOffS: after]
+    if (alreadyOff) f.alreadyOff = true else f.offMs = steps.off?.ok ? steps.off.ms : null
+    return f
 }
 
 Map evalPowerOn(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz) {
@@ -805,13 +852,18 @@ Map evalArt(List<Map> lines, List<Map> events) {
     if (firstLine(lines, '^tx frameArt: .*set_artmode_status')) setVia = "art channel"
     else if (firstLine(lines, '^tx remote: .*KEY_POWER')) setVia = "power key"
     else if (firstLine(lines, 'artMode already set')) setVia = "art channel"      // already on: nothing to send
+    // Some Frames send the set reply after the art_mode_changed broadcast, seconds later.
+    int setAt = lines.findIndexOf { (it.msg as String) =~ /^rx frameArt: .*set_artmode_status/ }
+    int castAt = lines.findIndexOf { (it.msg as String) =~ /^rx frameArt: .*art_mode_changed/ }
+    // The driver closes the art socket 2 s after the status, so a reply later than that is "not seen".
+    String setReply = setAt >= 0 ? (castAt >= 0 && castAt < setAt ? "after broadcast" : "before broadcast") : (castAt >= 0 ? "not seen" : "none")
     String ev = lastEvent(events.findAll { it.name == "artModeStatus" } as List<Map>, "artModeStatus")
     boolean matches = status == null || events.any { it.name == "artModeStatus" && it.value == status }
     return [artReady: firstLine(lines, '^rx frameArt: .*ms\\.channel\\.ready') != null, statusReply: status,
-            statusEventMatches: matches, artModeAfter: ev, setVia: setVia]
+            statusEventMatches: matches, artModeAfter: ev, setVia: setVia, setReply: setReply]
 }
 
-Map evalApps(List<Map> lines, List<Map> events) {
+Map evalApps(List<Map> lines, List<Map> events, Map steps) {
     Integer launch = null, close = null
     String closeBody = null
     for (Map l : lines) {
@@ -820,7 +872,8 @@ Map evalApps(List<Map> lines, List<Map> events) {
         def d = (l.msg as String) =~ /^app: DELETE \S+ status=(\d+) body=(.*)/
         if (d.find() && close == null) { close = d.group(1) as Integer; closeBody = d.group(2).trim() }
     }
-    return [launchStatus: launch, closeStatus: close, closeBody: closeBody,
+    // The launch is a synchronous call, so the step time is how long the TV took to answer it.
+    return [launchStatus: launch, launchMs: steps.launch?.ok ? steps.launch.ms : null, closeStatus: close, closeBody: closeBody,
             appEvent: events.any { it.name == "appName" && (it.value as String)?.trim() },
             closeEvent: events.any { it.name == "appName" && (it.value as String) == " " }]
 }
@@ -836,6 +889,51 @@ Map evalAppList(List<Map> lines) {
         } catch (e) { }
     }
     return [answered: l != null, apps: count]
+}
+
+// The model-describing part of a direct /api/v2/ read, under the names a mock profile uses.
+Map deviceInfoFields(Map info, List keys) {
+    Map dev = (info?.device ?: [:]) as Map
+    Map kept = [:]
+    keys.each { k -> if (dev.containsKey(k)) kept[k] = dev[k] }
+    Map support = [:]
+    def s = info?.isSupport
+    if (s instanceof String) { try { s = new JsonSlurper().parseText((s as String).trim()) } catch (e) { s = null } }
+    if (s instanceof Map) support = s as Map
+    return [deviceInfo: kept, isSupport: support, apiVersion: info?.version, deviceKeys: dev.keySet().sort().join(",")]
+}
+
+// Event names the TV sent that the driver neither acts on nor deliberately ignores; art events as "art:<name>".
+String otherMessages(List<Map> lines, List known, List knownArt) {
+    Set<String> out = new LinkedHashSet<String>()
+    for (Map l : lines) {
+        String msg = l.msg as String
+        if (!(msg.startsWith("rx remote: ") || msg.startsWith("rx frameArt: "))) continue
+        def m = msg =~ /"event":\s*"([^"]+)"\s*[,\x7D]/
+        String outer = null
+        while (m.find()) outer = m.group(1)            // the outer event comes last in the TV's JSON
+        if (outer == null) continue
+        if (!(outer in known)) out << outer
+        if (outer == "d2d_service_message") {
+            def a = msg =~ /\\"event\\": ?\\"(\w+)\\"/
+            if (a.find() && !(a.group(1) in knownArt)) out << "art:${a.group(1)}".toString()
+        }
+    }
+    return out.join(",")
+}
+
+// The protocol lines a maintainer needs to build a mock profile, kept even when the test passes.
+List<String> sampleLines(int test, List<Map> lines) {
+    String re = [2: '^rx remote: .*"ms\\.channel\\.(connect|unauthorized|timeOut)"', 7: '^rx frameArt: ',
+                 9: '^rx remote: .*ed\\.installedApp\\.get', 6: '^rx remote: '][test]
+    if (!re) return []
+    List<String> out = []
+    for (Map l : lines) {
+        if (!((l.msg as String) =~ re)) continue
+        out << "${(l.ts as String).substring(11)} ${maskLine(l.msg as String).take(400)}".toString()
+        if (out.size() >= 6) break
+    }
+    return out
 }
 
 // Stalled: running, and the next callback is over a minute late. The minute covers a slow step and a busy hub.
@@ -889,10 +987,12 @@ List<Map> testRows(Map run, Map names) {
 List<String> differences(Map fields, Map expect) {
     List<String> out = []
     expect?.each { k, rule ->
+        if (rule.optional && !fields.containsKey(k)) return     // not measured in this run
         def v = fields[k]
         boolean ok = true
         if (rule.containsKey("eq")) ok = (v == rule.eq)
         else if (rule.containsKey("ne")) ok = (v != rule.ne)
+        else if (rule.containsKey("none")) ok = (v == null || v == "")
         else if (rule.containsKey("max")) ok = v != null && (v as Long) <= (rule.max as Long)
         if (!ok) out << (k as String)
     }
@@ -905,21 +1005,47 @@ String formatReport(Map header, List<Map> results) {
     out << "app ${header.appVersion} · driver ${header.driverVersion ?: 'unknown'} · hub firmware ${header.firmware}".toString()
     out << ("TV: ${header.modelName ?: '?'} · platform ${header.platform ?: '?'} · API ${header.apiVersion ?: '?'} · " +
             "Frame ${header.frameTv ?: '?'} · token auth ${header.tokenSupport ?: '?'} · PowerState ${header.powerStateReported ?: '?'} · " +
-            "SmartThings ${header.smartThings ? 'linked' : 'not linked'}").toString()
+            "SmartThings setting ${header.smartThings ? 'on' : 'off'}").toString()
     out << "run: ${header.status} · polling ${header.pollS} s · slowest log read ${header.slowestReadMs ?: 0} ms".toString()
     out << "TV differs: the TV does something the driver doesn't assume · driver differs: the driver didn't act on what the TV sent"
     for (Map r : results) {
         out << ""
         List diffs = (r.diffs ?: []) as List
         out << "${r.test}. ${r.name} — ${verdictText(r)}".toString()
-        if (r.observed) out << ("   " + (r.observed as Map).collect { k, v -> "${k}=${v}" }.join(" "))
+        if (r.observed) out << ("   " + (r.observed as Map).collect { k, v -> "${k}=${v instanceof Map ? JsonOutput.toJson(v) : v}" }.join(" "))
         if (r.note) out << "   note: ${r.note}".toString()
+        if (r.samples && !(diffs && r.trace)) {
+            out << "   lines:"
+            (r.samples as List).each { out << "     ${it}".toString() }
+        }
         if (diffs && r.trace) {
             out << "   trace:"
             (r.trace as List).each { out << "     ${it}".toString() }
         }
     }
+    Map prof = profileFields(results)
+    if (prof) {
+        out << ""
+        out << "mock profile (for the maintainer):"
+        out << JsonOutput.prettyPrint(JsonOutput.toJson(prof))
+    }
     return out.join("\n")
+}
+
+// The report's fields a mock TV profile uses, taken from the tests that ran; otherMessages merged across tests.
+Map profileFields(List<Map> results) {
+    Map keys = [1: ["deviceInfo", "isSupport", "apiVersion"], 2: ["handshake", "connectMs"], 4: ["wentAway", "restAfterOffS"],
+                6: ["probeReply"], 7: ["artReady", "statusReply", "setReply", "powerStateInArt"],
+                8: ["launchMs", "closeBody"], 9: ["answered", "apps"]]
+    Map prof = [:]
+    Set<String> other = new LinkedHashSet<String>()
+    for (Map r : results) {
+        Map obs = (r.observed ?: [:]) as Map
+        ((keys[r.test as Integer] ?: []) as List).each { k -> if (obs.containsKey(k)) prof[k] = obs[k] }
+        if (obs.otherMessages) other.addAll((obs.otherMessages as String).tokenize(","))
+    }
+    if (prof) prof.otherMessages = other.join(",")
+    return prof
 }
 
 // Seconds until the next log read: at least as long as the last read took, so reading the log

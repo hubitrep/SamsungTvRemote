@@ -1,0 +1,6 @@
+{
+  "_source": "2025 Frame (QN55LS03FAFXZA): PowerState reads standby while showing art (ha-samsungtv-smart release notes 8.11.4); the art channel sends ms.channel.ready (notes/QN55LS03FAFXZA/WEBSOCKET_DECOMPILED.md). deviceInfo.model is made up.",
+  "deviceInfo": {"FrameTVSupport": "true", "model": "25_PONTUSM_FTV", "modelName": "QN55LS03FAFXZA", "VoiceSupport": "true"},
+  "isSupport": {"FrameTVSupport": "true", "remote_voiceControl": "true"},
+  "powerStateInArt": "standby"
+}

@@ -20,6 +20,11 @@ an app if the device knows its code, switch a Frame to art mode, and turn the TV
 | 8 | Apps | launch and close by REST, and the app events |
 | 9 | App list | whether the TV answers `ed.installedApp.get` |
 
+For the maintainer, every report also carries the TV's model fields from `/api/v2/`, the protocol
+lines of the handshake, art and app-list replies (masked), any event the driver doesn't handle
+(`otherMessages`, which makes the test differ), and at the end a mock profile built from all of it
+(see [TV profiles](#tv-profiles)).
+
 - `test-tester-helpers.groovy`: unit tests for its pure helpers, no hub needed
   (`groovy tests/test-tester-helpers.groovy`).
 - `test-live-tv.sh [@hub]`: runs it through its endpoints (turn on Script access in the app) and
@@ -43,24 +48,43 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout tv.key -out tv.pem -days 365 -
 Run it on a machine on the hub's subnet (Wake-on-LAN is a broadcast) and set the device's TV IP to
 that machine. The token it issues persists in `<workdir>/token.txt`.
 
-- **Power.** `KEY_POWER` puts it in standby; a Wake-on-LAN packet for its MAC boots it in
-  `MOCKTV_WAKE` seconds (default 5). In standby it doesn't answer REST or websockets, like a TV
-  that has dropped off the network.
+- **Power.** `KEY_POWER` puts it in standby; a Wake-on-LAN packet for its MAC boots it. Whether it
+  still answers REST and sockets in standby depends on the profile.
 - **Pairing.** A wrong or missing token on 8002 shows the "allow" dialog, accepted after 2 s; the
   reply carries a new token.
 - **Apps.** YouTube and Netflix answer the app status, launch and close calls; other ids get 404.
-- **Control.** `GET /mock/state`, `/mock/power?to=on|standby`, `/mock/quirks?set=a,b` and
+- **Control.** `GET /mock/state`, `/mock/power?to=on|standby`, `/mock/profile?name=<profile>` and
   `/mock/unpair` on port 8001 change it between test cases.
 
-`MOCKTV_QUIRKS` (or `/mock/quirks`) acts out differences between models:
+### TV profiles
 
-| Quirk | Behaviour |
+`MOCKTV_PROFILE=<file.json>` makes the mock act like a given TV. A profile uses the field names of
+the tester's report, and the report ends with a ready-made profile ("mock profile (for the
+maintainer)"), so a report from a new TV becomes a file in `mock-profiles/`. `default.json` fills in
+what a profile leaves out; in `deviceInfo` and `isSupport` a profile lists only the keys that differ,
+and `null` removes one. Running the tester against the mock with a profile taken from a report gives
+back the same report, timings aside.
+
+| Key | Report field or meaning |
 |---|---|
-| `frame` | Frame TV: the art channel answers `get_artmode_status` and `set_artmode_status` and broadcasts `art_mode_changed`; a short `KEY_POWER` toggles art mode, a press held 2.5 s or more turns it off |
-| `frame2024` | With `frame`: a token on the art channel stalls the handshake into `ms.channel.timeOut`, and the `set_artmode_status` reply trails the broadcast by 10 s |
-| `frame2025` | With `frame`: REST reports `PowerState: standby` while art mode is on |
-| `nopowerstate` | The REST device info has no `PowerState` |
-| `restinstandby` | REST answers in standby with `PowerState: standby`; the remote socket opens, then gets `ms.channel.timeOut` |
-| `notoken` | No token auth: `TokenAuthSupport` false, 8002 refused |
-| `deny` | The allow dialog is refused: `ms.channel.unauthorized`, then close |
-| `noapplist` | `ed.installedApp.get` is never answered |
+| `deviceInfo`, `isSupport`, `apiVersion` | test 1: the `/api/v2/` reply (model fields only). `FrameTVSupport`, `TokenAuthSupport` and the presence of `PowerState` decide how the mock behaves |
+| `handshake` | test 2: `ms.channel.connect`, or `ms.channel.unauthorized` when the allow dialog is refused |
+| `connectMs` | test 2: delay before `ms.channel.connect` |
+| `otherMessages` | events the TV sends that the driver doesn't handle; the mock sends them after a connect (`art:<name>` on the art channel) |
+| `wentAway` | test 4: `REST stopped`, or anything else for a TV that keeps answering REST in standby |
+| `restAfterOffS` | test 4: seconds REST keeps answering after the power-off |
+| `probeReply` | test 6: what a socket gets in standby when REST still answers (`ms.channel.timeOut`, or no answer) |
+| `artReady`, `statusReply`, `setReply`, `powerStateInArt` | test 7: art channel sends `ms.channel.ready`; art state at start; `set_artmode_status` reply before or after the broadcast (`not seen`: after); `PowerState` while showing art |
+| `launchMs`, `closeBody` | test 8: time to answer an app launch; body of the close reply |
+| `answered`, `apps` | test 9: whether `ed.installedApp.get` is answered, and with how many apps |
+| `bootS` | mock only: seconds from Wake-on-LAN to on (test 5's `firstAnswerMs` is an upper bound) |
+| `artTokenStalls` | mock only: a token on the art channel stalls the handshake into `ms.channel.timeOut` |
+
+| Profile | TV | Source |
+|---|---|---|
+| `default.json` | 2020 TU7000 | tester report and a direct `/api/v2/` read |
+| `frame2024.json` | 2024 Frame: late set reply, `PowerState` on in art, token stalls the art channel | ha-samsungtv-smart notes; platform string made up |
+| `frame2025.json` | 2025 Frame: `PowerState` standby while showing art | ha-samsungtv-smart release notes; platform string made up |
+| `nopowerstate.json` | no `PowerState`, REST answers in standby | constructed |
+| `notoken.json` | no token auth, plain `ws` on 8001 | constructed |
+| `refused.json` | the allow dialog refused | constructed |

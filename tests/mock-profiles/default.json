@@ -1,0 +1,32 @@
+{
+  "_source": "2020 TU7000 (UN50TU7000FXZC): tester report 0.1.0 and a direct /api/v2/ read, 2026-10-15. launchMs from the driver's note (the TV answers a launch after about 6 s); bootS from the TV answering /api/v2/ within 5 s of Wake-on-LAN.",
+  "deviceInfo": {
+    "FrameTVSupport": "false", "GamePadSupport": "true", "ImeSyncedSupport": "true", "Language": "fr_CA", "OS": "Tizen",
+    "PowerState": "on", "TokenAuthSupport": "true", "VoiceSupport": "false", "WallScreenRatio": "0", "WallService": "false",
+    "description": "Samsung DTV RCR", "developerMode": "0", "firmwareVersion": "Unknown", "model": "20_KANTSU2_UHD_BASIC",
+    "modelName": "UN50TU7000FXZC", "networkType": "wireless", "resolution": "3840x2160", "smartHubAgreement": "true",
+    "type": "Samsung SmartTV"
+  },
+  "isSupport": {
+    "DMP_DRM_PLAYREADY": "false", "DMP_DRM_WIDEVINE": "false", "DMP_available": "true", "EDEN_available": "true",
+    "FrameTVSupport": "false", "ImeSyncedSupport": "true", "TokenAuthSupport": "true", "remote_available": "true",
+    "remote_fourDirections": "true", "remote_touchPad": "true", "remote_voiceControl": "false"
+  },
+  "apiVersion": "2.0.25",
+  "handshake": "ms.channel.connect",
+  "connectMs": 1352,
+  "otherMessages": "",
+  "wentAway": "REST stopped",
+  "restAfterOffS": 0,
+  "probeReply": "ms.channel.timeOut",
+  "bootS": 5,
+  "launchMs": 6000,
+  "closeBody": "true",
+  "answered": false,
+  "apps": null,
+  "artReady": true,
+  "statusReply": "off",
+  "setReply": "before broadcast",
+  "powerStateInArt": "on",
+  "artTokenStalls": false
+}

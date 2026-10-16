@@ -4,85 +4,81 @@
 # xchwarze/samsung-tv-ws-api, the decompiled Frame notes in TheFab21/ha-samsungtv-smart, and a
 # 2020 TU7000. No code is taken from either project.
 #
-# usage: mocktv.py <cert.pem> <key.pem> <workdir>
-#   MOCKTV_QUIRKS=frame,nopowerstate,...   (see QUIRKS below)
-#   control: GET http://<mock>:8001/mock/state, /mock/power?to=on|standby, /mock/quirks?set=a,b
+# usage: [MOCKTV_PROFILE=<profile.json>] mocktv.py <cert.pem> <key.pem> <workdir>
+# A profile describes a TV with the tester report's field names; mock-profiles/default.json fills
+# what it leaves out. Control: GET http://<mock>:8001/mock/state, /mock/power?to=on|standby,
+# /mock/profile?name=<file in mock-profiles, without .json>, /mock/unpair.
 import asyncio, json, os, random, ssl, sys, time, uuid
 from aiohttp import web, WSMsgType
 
 CERT, KEY, WORK = sys.argv[1], sys.argv[2], sys.argv[3]
-QUIRKS_HELP = {
-    "frame": "Frame TV: art channel answers, a short KEY_POWER toggles art mode, a held one turns off",
-    "frame2024": "with frame: a token on the art channel stalls the handshake into ms.channel.timeOut, "
-                 "and the set_artmode_status reply trails the art_mode_changed broadcast by 10 s",
-    "frame2025": "with frame: REST reports PowerState standby while art mode is on",
-    "nopowerstate": "REST device info has no PowerState",
-    "restinstandby": "REST answers in standby (PowerState standby); the remote socket opens, then times out",
-    "notoken": "no token auth: TokenAuthSupport false, wss refused",
-    "deny": "the on-screen allow is refused: ms.channel.unauthorized, then close",
-    "noapplist": "ed.installedApp.get is never answered",
-}
-WAKE_S = float(os.environ.get("MOCKTV_WAKE", "5"))
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock-profiles")
 MAC = os.environ.get("MOCKTV_MAC", "f4:7b:09:00:00:01")
+UUID = "7e7ef6f4-0000-4000-8000-000000000001"
 APPS = {"111299001912": ("YouTube", "2.1.498"), "3201907018807": ("Netflix", "5.2.59020")}
 
-tv = {
-    "power": "on", "art": "off", "app": None, "quirks": set(),
-    "token": None, "booting": False,
-}
+P = {}
+tv = {"power": "on", "art": "off", "app": None, "token": None, "booting": False, "shutdownAt": None, "profile": None}
 TOKEN_FILE = os.path.join(WORK, "token.txt")
 if os.path.exists(TOKEN_FILE):
     tv["token"] = open(TOKEN_FILE).read().strip() or None
 sockets = set()        # (ws, channel)
 
-def q(name):
-    return name in tv["quirks"]
-
 def log(*a):
     print(time.strftime("%H:%M:%S"), *a, flush=True)
 
-def set_quirks(spec):
-    names = {s for s in spec.split(",") if s}
-    unknown = names - QUIRKS_HELP.keys()
-    if unknown:
-        raise ValueError(f"unknown quirks: {sorted(unknown)}")
-    tv["quirks"] = names
-    log("quirks:", sorted(names) or "none")
+def load_profile(path):
+    global P
+    p = json.load(open(os.path.join(PROFILE_DIR, "default.json")))
+    if path:
+        over = json.load(open(path))
+        # deviceInfo and isSupport merge key by key, so a profile lists only what differs; null removes a key
+        for k in ("deviceInfo", "isSupport"):
+            if k in over:
+                p[k] = {kk: vv for kk, vv in {**p[k], **over.pop(k)}.items() if vv is not None}
+        p.update(over)
+    P = {k: v for k, v in p.items() if not k.startswith("_")}
+    tv["art"] = P.get("statusReply") or "off"
+    tv["profile"] = os.path.basename(path) if path else "default.json"
+    log("profile:", tv["profile"], "-", P["deviceInfo"].get("modelName"))
+
+def frame():
+    return P["deviceInfo"].get("FrameTVSupport") == "true"
+
+def token_auth():
+    return P["deviceInfo"].get("TokenAuthSupport") == "true"
+
+def reports_power():
+    return "PowerState" in P["deviceInfo"]
 
 def device_info(request):
     host = request.host.split(":")[0]
-    frame, token = str(q("frame")).lower(), str(not q("notoken")).lower()
-    dev = {
-        "FrameTVSupport": frame, "GamePadSupport": "true", "ImeSyncedSupport": "true",
-        "Language": "en_US", "OS": "Tizen", "TokenAuthSupport": token, "VoiceSupport": "false",
-        "WallScreenRatio": "0", "WallService": "false", "countryCode": "CA",
-        "description": "Samsung DTV RCR", "developerIP": "0.0.0.0", "developerMode": "0",
-        "duid": "uuid:7e7ef6f4-0000-4000-8000-000000000001", "firmwareVersion": "Unknown",
-        "id": "uuid:7e7ef6f4-0000-4000-8000-000000000001", "ip": host,
-        "model": "22_PONTUSM_FTV" if q("frame") else "20_KANTSU2_UHD_BASIC",
-        "modelName": "QN55LS03BAFXZC" if q("frame") else "UN50TU7000FXZC",
-        "name": "[TV] Mock", "networkType": "wireless", "resolution": "3840x2160",
-        "smartHubAgreement": "true", "ssid": "", "type": "Samsung SmartTV",
-        "udn": "uuid:7e7ef6f4-0000-4000-8000-000000000001", "wifiMac": MAC,
-    }
-    if not q("nopowerstate"):
-        dev["PowerState"] = "standby" if q("frame2025") and tv["art"] == "on" else tv["power"]
-    support = {"FrameTVSupport": frame, "TokenAuthSupport": token, "remote_available": "true",
-               "remote_voiceControl": "false"}
-    return {"device": dev, "id": dev["id"], "isSupport": json.dumps(support) + "\n",
+    dev = dict(P["deviceInfo"])
+    dev.update({"duid": f"uuid:{UUID}", "id": f"uuid:{UUID}", "udn": f"uuid:{UUID}", "ip": host,
+                "wifiMac": MAC, "name": "[TV] Mock", "ssid": "", "developerIP": "0.0.0.0"})
+    if reports_power():
+        state = "on" if tv["power"] == "on" else "standby"
+        if frame() and tv["art"] == "on" and P.get("powerStateInArt"):
+            state = P["powerStateInArt"]
+        dev["PowerState"] = state
+    return {"device": dev, "id": dev["id"], "isSupport": json.dumps(P["isSupport"]) + "\n",
             "name": dev["name"], "remote": "1.0", "type": "Samsung SmartTV",
-            "uri": f"http://{host}:8001/api/v2/", "version": "2.0.25"}
+            "uri": f"http://{host}:8001/api/v2/", "version": P["apiVersion"]}
 
 async def asleep():
     # an off TV doesn't answer; hold the request until the client gives up
     await asyncio.sleep(120)
     raise web.HTTPServiceUnavailable()
 
-def awake_for_rest():
-    return tv["power"] == "on" or (tv["power"] == "standby" and q("restinstandby"))
+def shutting_down():
+    return tv["shutdownAt"] is not None and time.monotonic() - tv["shutdownAt"] < (P.get("restAfterOffS") or 0)
+
+# test 4 wentAway: "REST stopped" means it stops answering; otherwise it answers in standby
+def rest_in_standby():
+    return "REST stopped" not in (P.get("wentAway") or "REST stopped")
 
 async def rest_info(request):
-    if not awake_for_rest():
+    if tv["power"] != "on" and not (rest_in_standby() or shutting_down()):
         log("rest: GET /api/v2/ (asleep, no answer)")
         await asleep()
     info = device_info(request)
@@ -98,16 +94,16 @@ async def rest_app(request):
         return web.json_response({"code": 404, "message": "Not found error.", "status": 404}, status=404)
     name, ver = APPS[app_id]
     if request.method == "POST":
+        await asyncio.sleep((P.get("launchMs") or 0) / 1000)
         tv["app"] = app_id
         body = "true"
     elif request.method == "DELETE":
         if tv["app"] == app_id:
             tv["app"] = None
-        body = "true"
+        body = P.get("closeBody") or "true"
     else:
         running = tv["app"] == app_id
-        body = json.dumps({"id": app_id, "name": name, "running": running, "version": ver,
-                           "visible": running})
+        body = json.dumps({"id": app_id, "name": name, "running": running, "version": ver, "visible": running})
     log("rest:", request.method, app_id, "->", body)
     return web.Response(text=body, content_type="application/json")
 
@@ -116,19 +112,18 @@ async def send(ws, channel, msg):
     log(f"tx {channel}:", text[:300])
     await ws.send_str(text)
 
+def d2d(inner):
+    return {"data": json.dumps(inner), "event": "d2d_service_message", "from": "7e7ef6f4-0000-4000-8000-0000000000aa"}
+
 async def broadcast_art(inner):
     for ws, ch in list(sockets):
         if ch == "com.samsung.art-app" and not ws.closed:
             await send(ws, ch, d2d(inner))
 
-def d2d(inner):
-    return {"data": json.dumps(inner), "event": "d2d_service_message",
-            "from": "7e7ef6f4-0000-4000-8000-0000000000aa"}
-
 async def go_standby(reason):
     log("power: standby", f"({reason})")
-    tv["power"], tv["app"] = "standby", None
-    if q("frame"):
+    tv["power"], tv["app"], tv["shutdownAt"] = "standby", None, time.monotonic()
+    if frame():
         tv["art"] = "off"
     for ws, ch in list(sockets):
         await ws.close()
@@ -137,19 +132,22 @@ async def boot():
     if tv["power"] == "on" or tv["booting"]:
         return
     tv["booting"] = True
-    log(f"wol: booting, on in {WAKE_S:g} s")
-    await asyncio.sleep(WAKE_S)
-    tv["power"], tv["booting"] = "on", False
+    wake = float(P.get("bootS") or 5)
+    log(f"wol: booting, on in {wake:g} s")
+    await asyncio.sleep(wake)
+    tv["power"], tv["booting"], tv["shutdownAt"] = "on", False, None
     log("power: on")
 
 async def channel(request):
     name = request.match_info["channel"]
     secure = request.secure
     params = request.query
-    if secure and q("notoken"):
+    if secure and not token_auth():
         raise web.HTTPNotFound()
-    if tv["power"] != "on" and not (tv["power"] == "standby" and q("restinstandby")):
-        await asleep()
+    if tv["power"] != "on":
+        # in standby a TV that still answers REST accepts the socket, then times out; one that doesn't hangs
+        if not (rest_in_standby() and P.get("probeReply") == "ms.channel.timeOut"):
+            await asleep()
     ws = web.WebSocketResponse(autoping=True)
     await ws.prepare(request)
     log(f"ws open {name} secure={secure} token={'yes' if params.get('token') else 'no'}")
@@ -171,33 +169,42 @@ async def channel(request):
         log(f"ws closed {name}")
     return ws
 
+def extra_events(art):
+    names = [n for n in (P.get("otherMessages") or "").split(",") if n]
+    return [n[4:] for n in names if n.startswith("art:")] if art else [n for n in names if not n.startswith("art:")]
+
 async def handshake(ws, name, secure, params):
     if tv["power"] != "on":
         await asyncio.sleep(1)
         await send(ws, name, {"event": "ms.channel.timeOut"})
         return False
     if name == "com.samsung.art-app":
-        if q("frame2024") and params.get("token"):
+        if P.get("artTokenStalls") and params.get("token"):
             await asyncio.sleep(5)
             await send(ws, name, {"event": "ms.channel.timeOut"})
             return False
         await send(ws, name, {"data": {"clients": [], "id": str(uuid.uuid4())}, "event": "ms.channel.connect"})
-        if q("frame"):
+        if frame() and P.get("artReady", True):
             await send(ws, name, {"data": {}, "event": "ms.channel.ready"})
+        for ev in extra_events(True):
+            await send(ws, name, d2d({"event": ev}))
         return True
     data = {"clients": [], "id": str(uuid.uuid4())}
-    if secure and not q("notoken"):
+    if secure and token_auth():
         given = params.get("token")
         if not tv["token"] or given != tv["token"]:
             log("remote: unknown token, showing the allow dialog")
             await asyncio.sleep(2)
-            if q("deny"):
+            if P.get("handshake") == "ms.channel.unauthorized":
                 await send(ws, name, {"event": "ms.channel.unauthorized"})
                 return False
             tv["token"] = str(random.randint(10000000, 99999999))
             open(TOKEN_FILE, "w").write(tv["token"])
         data["token"] = tv["token"]
+    await asyncio.sleep((P.get("connectMs") or 0) / 1000)
     await send(ws, name, {"data": data, "event": "ms.channel.connect"})
+    for ev in extra_events(False):
+        await send(ws, name, {"data": {}, "event": ev})
     return True
 
 async def handle(ws, name, msg):
@@ -205,12 +212,14 @@ async def handle(ws, name, msg):
     if name == "samsung.remote.control" and method == "ms.remote.control":
         await key(params.get("Cmd"), params.get("DataOfCmd"))
     elif method == "ms.channel.emit" and params.get("event") == "ed.installedApp.get":
-        if not q("noapplist"):
+        if P.get("answered"):
+            n = P.get("apps") or len(APPS)
+            entries = list(APPS.items()) + [(f"3201{i:09d}", (f"App {i}", "1.0")) for i in range(max(0, n - len(APPS)))]
             apps = [{"appId": i, "app_type": 2, "icon": f"/opt/share/webappservice/apps_icon/FirstScreen/{i}/250x250.png",
-                     "is_lock": 0, "name": n} for i, (n, _) in APPS.items()]
+                     "is_lock": 0, "name": nm} for i, (nm, _) in entries[:n]]
             await send(ws, name, {"data": {"data": apps}, "event": "ed.installedApp.get", "from": "host"})
     elif name == "com.samsung.art-app" and params.get("event") == "art_app_request":
-        if q("frame"):
+        if frame():
             await art(ws, name, params["data"])
     else:
         await send(ws, name, {"data": {"message": f"unrecognized method value : {method}"}, "event": "ms.error"})
@@ -220,7 +229,7 @@ power_press = {"at": None}
 async def key(cmd, code):
     if code != "KEY_POWER":
         return
-    if not q("frame"):
+    if not frame():
         if cmd in ("Click", "Press"):
             await asyncio.sleep(1)
             await go_standby("KEY_POWER")
@@ -256,7 +265,8 @@ async def art(ws, name, raw):
         tv["art"] = value
         log("art mode:", value)
         reply = {"event": "set_artmode_status", "status": value, "id": req.get("id"), "request_id": rid}
-        if q("frame2024"):
+        # "not seen" in a report: the reply came after the driver closed the socket, so after the broadcast
+        if P.get("setReply") in ("after broadcast", "not seen"):
             if changed:
                 await broadcast_art({"event": "art_mode_changed", "status": value})
             await asyncio.sleep(10)
@@ -269,13 +279,14 @@ async def art(ws, name, raw):
         await send(ws, name, d2d({"event": "error", "request_id": rid, "request_data": raw, "error_code": "-7"}))
 
 async def mock_state(request):
-    return web.json_response({k: (sorted(v) if isinstance(v, set) else v) for k, v in tv.items() if k != "token"}
-                             | {"paired": tv["token"] is not None, "sockets": sorted(ch for _, ch in sockets)})
+    return web.json_response({k: v for k, v in tv.items() if k not in ("token", "shutdownAt")}
+                             | {"paired": tv["token"] is not None, "sockets": sorted(ch for _, ch in sockets),
+                                "model": P["deviceInfo"].get("modelName")})
 
 async def mock_power(request):
     to = request.query.get("to")
     if to == "on":
-        tv["power"] = "on"
+        tv["power"], tv["shutdownAt"] = "on", None
         log("power: on (control)")
     elif to == "standby":
         await go_standby("control")
@@ -283,11 +294,12 @@ async def mock_power(request):
         raise web.HTTPBadRequest(text="to=on|standby")
     return await mock_state(request)
 
-async def mock_quirks(request):
-    try:
-        set_quirks(request.query.get("set", ""))
-    except ValueError as e:
-        raise web.HTTPBadRequest(text=str(e))
+async def mock_profile(request):
+    name = os.path.basename(request.query.get("name", "default"))
+    path = os.path.join(PROFILE_DIR, f"{name}.json")
+    if not os.path.exists(path):
+        raise web.HTTPBadRequest(text=f"no profile {name}")
+    load_profile(None if name == "default" else path)
     return await mock_state(request)
 
 async def mock_unpair(request):
@@ -305,14 +317,14 @@ class Wol(asyncio.DatagramProtocol):
             asyncio.ensure_future(boot())
 
 async def main():
-    set_quirks(os.environ.get("MOCKTV_QUIRKS", ""))
+    load_profile(os.environ.get("MOCKTV_PROFILE"))
     app = web.Application()
     app.router.add_get("/api/v2/", rest_info)
     app.router.add_route("*", "/api/v2/applications/{app}", rest_app)
     app.router.add_get("/api/v2/channels/{channel}", channel)
     app.router.add_get("/mock/state", mock_state)
     app.router.add_get("/mock/power", mock_power)
-    app.router.add_get("/mock/quirks", mock_quirks)
+    app.router.add_get("/mock/profile", mock_profile)
     app.router.add_get("/mock/unpair", mock_unpair)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

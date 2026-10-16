@@ -1,0 +1,5 @@
+{
+  "_source": "An older TV without token auth: TokenAuthSupport false, so the driver uses ws on 8001 and 8002 is refused (samsung-tv-ws-api picks the port the same way). Constructed: not from a tester report.",
+  "deviceInfo": {"TokenAuthSupport": "false", "model": "16_JAZZM_UHD", "modelName": "UN55KU6300"},
+  "isSupport": {"TokenAuthSupport": "false"}
+}
