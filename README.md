@@ -4,8 +4,8 @@ Hubitat driver for Samsung Tizen TVs (2016 and later): power, remote keys, apps 
 TV's local websocket API, with an optional SmartThings connection for data the local API does not
 provide.
 
-This is a maintained fork of [Dave Gutheinz's Samsung TV Remote](https://github.com/DaveGut/HubitatActive/tree/master/SamsungTvRemote),
-continued with his agreement. Dave wrote the driver; the changes below are on top of his 2.3.9b.
+Based on [Dave Gutheinz's Samsung TV Remote](https://github.com/DaveGut/HubitatActive/tree/master/SamsungTvRemote),
+with his agreement; the changes below are on top of his 2.3.9b. Thank you, Dave, for the driver.
 Support thread: [Samsung Hubitat TV Integration](https://community.hubitat.com/t/samsung-hubitat-tv-integration-2016-and-later/55120).
 
 ## Install
@@ -30,9 +30,14 @@ working and nothing has to be recreated.
 
 After updating, open each TV device and click Save Preferences.
 
+## Tester
+
+The optional **Samsung TV Remote Tester** app runs the driver through a set of tests on your TV and
+writes a report to paste in the support thread. See [tests/README.md](tests/README.md).
+
 ## Changes
 
-### Unreleased
+### 2.4.3 (beta)
 
 - Frame TVs: `artModeStatus` is read over the art channel at configure, after each power change and
   after `artMode`, and `artMode` sets art mode there instead of sending a blind `KEY_POWER`. Before,

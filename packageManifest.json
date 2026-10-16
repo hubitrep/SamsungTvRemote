@@ -1,19 +1,32 @@
 {
   "packageName": "Samsung TV Remote (hubitrep)",
   "author": "hubitrep (original by David Gutheinz)",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "minimumHEVersion": "2.3.9",
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
   "communityLink": "https://community.hubitat.com/t/samsung-hubitat-tv-integration-2016-and-later/55120",
-  "dateReleased": "2026-10-14",
-  "releaseNotes": "App launch and app presets work again. on() resends Wake-on-LAN, then tries SmartThings when linked. With SmartThings, inputSource reports and sets the input on 2018 and later TVs. Full list in the README.",
+  "dateReleased": "2026-10-15",
+  "releaseNotes": "Beta. Frame TVs: art mode is read and set over the art channel (it never worked before). Refresh reads the power state. Keys wait for the TV's allow prompt on a new connection. New trace logging preference. New optional app: Samsung TV Remote Tester, which reports how your TV differs from what the driver expects. Full list in the README.",
   "drivers": [
     {
       "id": "70c694f2-d2cb-4c00-9357-28376f9c794f",
       "name": "Samsung TV Remote",
       "namespace": "davegut",
       "location": "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVRemote.groovy",
-      "required": true
+      "required": true,
+      "version": "2.4.3"
+    }
+  ],
+  "apps": [
+    {
+      "id": "7b47edcf-b9be-4e62-abdb-42cae0e75229",
+      "name": "Samsung TV Remote Tester",
+      "namespace": "hubitrep",
+      "location": "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/tests/SamsungTVRemoteTester.groovy",
+      "required": false,
+      "oauth": false,
+      "primary": false,
+      "version": "0.2.0"
     }
   ]
 }
