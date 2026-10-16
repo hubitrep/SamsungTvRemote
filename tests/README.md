@@ -30,6 +30,7 @@ that machine. The token it issues persists in `<workdir>/token.txt`.
 |---|---|
 | `frame` | Frame TV: the art channel answers `get_artmode_status` and `set_artmode_status` and broadcasts `art_mode_changed`; a short `KEY_POWER` toggles art mode, a press held 2.5 s or more turns it off |
 | `frame2024` | With `frame`: a token on the art channel stalls the handshake into `ms.channel.timeOut`, and the `set_artmode_status` reply trails the broadcast by 10 s |
+| `frame2025` | With `frame`: REST reports `PowerState: standby` while art mode is on |
 | `nopowerstate` | The REST device info has no `PowerState` |
 | `restinstandby` | REST answers in standby with `PowerState: standby`; the remote socket opens, then gets `ms.channel.timeOut` |
 | `notoken` | No token auth: `TokenAuthSupport` false, 8002 refused |

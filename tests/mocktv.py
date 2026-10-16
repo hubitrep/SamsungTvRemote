@@ -15,6 +15,7 @@ QUIRKS_HELP = {
     "frame": "Frame TV: art channel answers, a short KEY_POWER toggles art mode, a held one turns off",
     "frame2024": "with frame: a token on the art channel stalls the handshake into ms.channel.timeOut, "
                  "and the set_artmode_status reply trails the art_mode_changed broadcast by 10 s",
+    "frame2025": "with frame: REST reports PowerState standby while art mode is on",
     "nopowerstate": "REST device info has no PowerState",
     "restinstandby": "REST answers in standby (PowerState standby); the remote socket opens, then times out",
     "notoken": "no token auth: TokenAuthSupport false, wss refused",
@@ -65,7 +66,7 @@ def device_info(request):
         "udn": "uuid:7e7ef6f4-0000-4000-8000-000000000001", "wifiMac": MAC,
     }
     if not q("nopowerstate"):
-        dev["PowerState"] = tv["power"]
+        dev["PowerState"] = "standby" if q("frame2025") and tv["art"] == "on" else tv["power"]
     support = {"FrameTVSupport": frame, "TokenAuthSupport": token, "remote_available": "true",
                "remote_voiceControl": "false"}
     return {"device": dev, "id": dev["id"], "isSupport": json.dumps(support) + "\n",
