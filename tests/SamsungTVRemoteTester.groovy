@@ -433,6 +433,7 @@ void sendStep(Map s, Map run) {
         case "on": tv.on(); break
         case "off": tv.off(); break
         case "close": tv.close(); break
+        case "refresh": tv.refresh(); break
         case "home": tv.home(); break
         case "burst": 3.times { tv.home() }; break
         case "configure": tv.configure(); break
@@ -575,7 +576,8 @@ List<Map> stepsFor(int test, Map run) {
         case 0:
             // A TV that is off gets Wake-on-LAN; it then answers a poll within about 30 s of booting.
             if (run.ctx.startSwitch == "off") return [[name: "powerOn", cmd: "on", wait: '^rest: status=200', timeout: poll + 60, after: 3]]
-            return [[name: "poll", wait: '^rest: status=', timeout: poll + 15]]
+            // Refresh polls at once; a driver older than that is caught by the scheduled poll.
+            return [[name: "poll", cmd: "refresh", wait: '^rest: status=', timeout: poll + 15]]
         case 1: return [[name: "poll", wait: '^rest: status=', timeout: poll + 15, sinceRun: true]]
         case 2: return [[name: "close", cmd: "close", after: 2],
                         [name: "home", cmd: "home", wait: '^rx remote: .*"ms\\.channel\\.(connect|unauthorized|timeOut)"', timeout: 15, after: 2]]
@@ -585,7 +587,7 @@ List<Map> stepsFor(int test, Map run) {
         case 4: return [[name: "off", cmd: "off", wait: run.ctx.alreadyOff ? '^off: ' : '^setPowerState: \\[switch: off\\]', timeout: poll + 20],
                         [name: "hold", sleep: poll + 10]]
         case 5: return [[name: "on", cmd: "on", wait: '^setPowerState: \\[switch: on\\]', timeout: Math.max(60, poll + 30), after: 5]]
-        case 6: return [[name: "probe", wait: '^rx remote: .*"ms\\.channel\\.timeOut"|^ws remote: (failure|status: open)', timeout: poll + 20],
+        case 6: return [[name: "probe", cmd: "refresh", wait: '^rx remote: .*"ms\\.channel\\.timeOut"|^ws remote: (failure|status: open)', timeout: poll + 20],
                         [name: "settle", sleep: 5]]
         case 7: return [[name: "status", cmd: "configure", wait: '^rx frameArt: .*artmode_status', timeout: 20, after: 2],
                         [name: "set", cmd: "artMode", wait: '^rx frameArt: .*(art_mode_changed|set_artmode_status)|^tx remote: .*KEY_POWER|already set', timeout: 20, after: 3]]
