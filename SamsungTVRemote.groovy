@@ -610,6 +610,8 @@ def artMode() {
 //	a reply on the art channel sets state.artModeWs; until then artMode() falls back to KEY_POWER
 def getArtModeStatus(Map retry = null) {
 	if (getDataValue("frameTv") == "true") {
+		//	off() is holding KEY_POWER on the remote socket; the art reply doesn't matter now
+		if (state.powerOffAt && now() - state.powerOffAt < 15000) { return }
 		//	replacing a remote socket mid-handshake would drop its queued keys
 		Map s = ws()
 		int tries = retry?.tries ?: 0
@@ -840,8 +842,8 @@ def connect(funct) {
 def close() {
 	logDebug("close")
 	Map s = ws()
-	//	the transport reports closing later, possibly after a replacement socket is up
-	if (s.phase != "closed") { s.closedAt = now() }
+	//	each socket shut here reports closing once, later, possibly after a replacement is up
+	if (s.phase != "closed") { s.pendingClose = ((s.pendingClose ?: []) as List) + [now()] }
 	s.phase = "closed"
 	s.queue = []
 	s.holdAt = null
@@ -862,9 +864,11 @@ def webSocketStatus(message) {
 		//	the TV normally confirms at once with ms.channel.connect
 		runIn(3, wsReadyTimeout)
 	} else if (message.startsWith("status: closing")) {
-		if (s.closedAt && now() - s.closedAt < 3000) {
+		//	a Frame finishing a late art reply can take 10 s to complete the close
+		List pending = ((s.pendingClose ?: []) as List).findAll { now() - (it as Long) < 15000 }
+		if (pending) {
 			//	the socket close() shut, not the current one
-			s.closedAt = null
+			s.pendingClose = pending.drop(1)
 			logData << [action: "ignored"]
 		} else if (s.phase != "connecting") {
 			s.phase = "closed"
