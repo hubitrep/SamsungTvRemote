@@ -19,6 +19,7 @@ an app if the device knows its code, switch a Frame to art mode, and turn the TV
 | 7 | Art mode | Frame TVs: art channel handshake, status reply, setting it there |
 | 8 | Apps | launch and close by REST, and the app events |
 | 9 | App list | whether the TV answers `ed.installedApp.get` |
+| 10 | Discovery | whether the TV announces `_airplay._tcp` and the driver's `findTvs` finds it at its address (2016-2017 TVs are expected not to) |
 
 For the maintainer, every report also carries the TV's model fields from `/api/v2/`, the protocol
 lines of the handshake, art and app-list replies (masked), any event the driver doesn't handle

@@ -47,6 +47,9 @@ List<String> SIGNATURES = [
     'String otherMessages(List<Map> lines, List known, List knownArt) {',
     'List<String> sampleLines(int test, List<Map> lines) {',
     'Map evalAppList(List<Map> lines) {',
+    'Map evalDiscovery(List<Map> lines, String ip) {',
+    'Integer modelYear(String model) {',
+    'Map discoveryExpect(Integer year) {',
     'boolean runStalled(Map run, long nowMs) {',
     'Map splitDiffs(List diffs, Map expect) {',
     'String verdictOf(Map r) {',
@@ -189,6 +192,34 @@ println 'evalAppList'
 Map al = h.evalAppList([line('1:00:00.000', 'rx remote: {"data": {"data": [{"appId": "1", "name": "YouTube"}, {"appId": "2", "name": "Deezer"}]}, "event": "ed.installedApp.get", "from": "host"}')])
 check 'answered with a count', al == [answered: true, apps: 2]
 check 'not answered', h.evalAppList([]) == [answered: false, apps: null]
+
+println 'evalDiscovery'
+String mline = 'mdns: name=[TV] Living ip=192.0.2.10 manufacturer=Samsung model=UMOCK keys=deviceid,manufacturer,model,serialNumber'
+Map dfound = h.evalDiscovery([line('1:00:00.000', mline), line('1:00:07.000', 'Found Living TV at 192.0.2.10', 'info')], '192.0.2.10')
+check 'found: model and keys from the line', dfound == [result: 'found', model: 'UMOCK', keys: 'deviceid,manufacturer,model,serialNumber']
+Map dother = h.evalDiscovery([line('1:00:00.000', 'mdns: name=Other ip=192.0.2.11 manufacturer=Samsung model=Q60 keys=a,b')], '192.0.2.10')
+check 'other: only another TV announced', dother.result == 'other' && !dother.model
+check 'other wins over the first line only when the IP matches',
+    h.evalDiscovery([line('1:00:00.000', 'mdns: name=Other ip=192.0.2.11 manufacturer=Samsung model=Q60 keys=a'), line('1:00:00.100', mline)], '192.0.2.10').model == 'UMOCK'
+check 'none: warning and no mdns line', h.evalDiscovery([line('1:00:07.000', 'No Samsung TV answered. The TV must be on', 'warn')], '192.0.2.10').result == 'none'
+check 'unsupported: neither', h.evalDiscovery([line('1:00:00.000', 'rest: status=200 ms=5 PowerState=on keys=OS')], '192.0.2.10').result == 'unsupported'
+check 'no model or keys on the line', h.evalDiscovery([line('1:00:00.000', 'mdns: name=X ip=192.0.2.10 manufacturer=- model=- keys=')], '192.0.2.10') == [result: 'found', model: '-', keys: '']
+check 'ip must match whole address', h.evalDiscovery([line('1:00:00.000', 'mdns: name=X ip=192.0.2.100 manufacturer=Samsung model=Q keys=a')], '192.0.2.10').result == 'other'
+
+println 'modelYear'
+check 'year from the prefix', h.modelYear('20_KANTSU2_UHD_BASIC') == 2020 && h.modelYear('17_NIKE_UHD') == 2017
+check 'unreadable', h.modelYear(null) == null && h.modelYear('') == null && h.modelYear('QN65Q60') == null
+
+println 'discoveryExpect'
+check '2016-2017: none expected', h.discoveryExpect(2017) == [result: [eq: 'none']]
+check '2018 on: found expected', h.discoveryExpect(2018) == [result: [eq: 'found']] && h.discoveryExpect(2020) == [result: [eq: 'found']]
+check 'unknown year: no expectation', h.discoveryExpect(null) == [:]
+check 'differences follow it', h.differences([result: 'none'], h.discoveryExpect(2017)) == [] && h.differences([result: 'none'], h.discoveryExpect(2020)) == ['result']
+
+println 'discovery in the report'
+check 'name masked in the trace', h.traceLines([line('1:00:00.000', mline)]) == ['1:00:00.000 mdns: name=<name> ip=<ip> manufacturer=Samsung model=UMOCK keys=deviceid,manufacturer,model,serialNumber']
+check 'mock profile gets airplay model', h.profileFields([[test: 10, observed: [result: 'found', model: 'UMOCK', keys: 'a']]]) == [airplay: [model: 'UMOCK'], otherMessages: '']
+check 'no airplay when not found', h.profileFields([[test: 10, observed: [result: 'none', model: null, keys: null]]]) == [:]
 
 println 'deviceInfoFields'
 Map fi = h.deviceInfoFields([device: [OS: 'Tizen', duid: 'uuid:x', wifiMac: 'f4:7b:09:12:34:56', PowerState: 'on'], version: '2.0.25',

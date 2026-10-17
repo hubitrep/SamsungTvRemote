@@ -32,11 +32,12 @@ import java.text.SimpleDateFormat
 
 @Field static final Map TEST_NAMES = [
     0: "Connection", 1: "Device info", 2: "Remote socket", 3: "Key burst", 4: "Power off", 5: "Power on",
-    6: "Standby check", 7: "Art mode", 8: "Apps", 9: "App list"
+    6: "Standby check", 7: "Art mode", 8: "Apps", 9: "App list", 10: "Discovery"
 ]
 
 // Run order: power last, so the TV ends on, and art mode before it, so the power cycle resets art mode.
-@Field static final List<Integer> ORDER = [1, 2, 3, 8, 9, 7, 4, 6, 5]
+// Discovery needs the TV on, so it runs before the power tests.
+@Field static final List<Integer> ORDER = [1, 2, 3, 8, 9, 10, 7, 4, 6, 5]
 
 // Device info fields that describe the model, not the user; the rest (ids, names, addresses) stay out of the report.
 @Field static final List DEVICE_INFO_KEYS = ["FrameTVSupport", "GamePadSupport", "ImeSyncedSupport", "Language", "OS", "PowerState",
@@ -68,7 +69,8 @@ import java.text.SimpleDateFormat
         setVia: [eq: "art channel", driver: true], otherMessages: [none: true]],
     8: [launchStatus: [eq: 200], closeStatus: [eq: 200], closeBody: [eq: "true"],
         appEvent: [eq: true, driver: true], closeEvent: [eq: true, driver: true]],
-    9: [answered: [eq: true], otherMessages: [none: true]]
+    9: [answered: [eq: true], otherMessages: [none: true]],
+    10: [:]     // by model year, see discoveryExpect
 ]
 
 
@@ -441,6 +443,7 @@ void sendStep(Map s, Map run) {
         case "appOpenByName": tv.appOpenByName(args[0] as String); break
         case "appClose": tv.appClose(); break
         case "getInstalledApps": tv.getInstalledApps(); break
+        case "findTvs": tv.findTvs(); break
         default: throw new IllegalArgumentException("unknown step command ${s.cmd}")
     }
 }
@@ -518,9 +521,9 @@ void finishTest() {
         }
     } else {
         // Device info and the art test read /api/v2/ directly: the driver's trace has only its key names.
-        Map info = (test in [1, 7]) ? fetchDeviceInfo() : null
+        Map info = (test in [1, 7, 10]) ? fetchDeviceInfo() : null
         run = state.run as Map
-        Map r = evaluateTest(test, lines, steps, run, events)
+        Map r = evaluateTest(test, lines, steps, run, events, info)
         if (test == 1 && info) r.observed = (r.observed as Map) + deviceInfoFields(info, DEVICE_INFO_KEYS)
         if (test == 7 && info) r.observed = (r.observed as Map) + [powerStateInArt: (info.device as Map)?.PowerState ?: (info.status == 200 ? "absent" : "no answer")]
         r.samples = sampleLines(test, lines)
@@ -545,7 +548,7 @@ private Map fetchDeviceInfo() {
     return out
 }
 
-Map evaluateTest(int test, List<Map> lines, Map steps, Map run, List<Map> events) {
+Map evaluateTest(int test, List<Map> lines, Map steps, Map run, List<Map> events, Map info = null) {
     Map r = [test: test, name: TEST_NAMES[test]]
     TimeZone tz = location.timeZone
     Map f
@@ -559,13 +562,16 @@ Map evaluateTest(int test, List<Map> lines, Map steps, Map run, List<Map> events
         case 7: f = evalArt(lines, events); break
         case 8: f = evalApps(lines, events, steps); break
         case 9: f = evalAppList(lines); break
+        case 10: f = evalDiscovery(lines, tv.getSetting("deviceIp") as String); break
         default: f = [:]
     }
     String other = otherMessages(lines, KNOWN_EVENTS, KNOWN_ART_EVENTS)
     if (other) f.otherMessages = other
     r.observed = f
-    r.diffs = differences(f, EXPECT[test] as Map)
-    r.putAll(splitDiffs(r.diffs as List, EXPECT[test] as Map))
+    // Discovery is judged by the TV's model year, read from its REST model field.
+    Map expect = (test == 10) ? discoveryExpect(modelYear((info?.device as Map)?.model as String)) : (EXPECT[test] as Map)
+    r.diffs = differences(f, expect)
+    r.putAll(splitDiffs(r.diffs as List, expect))
     if (r.diffs) r.trace = traceLines(lines)
     return r
 }
@@ -594,6 +600,8 @@ List<Map> stepsFor(int test, Map run) {
         case 8: return [[name: "launch", cmd: "appOpenByName", args: [run.ctx.app ?: "YouTube"], wait: '^app: POST', timeout: 25, after: 5],
                         [name: "close", cmd: "appClose", wait: '^app: DELETE', timeout: 15, after: 2]]
         case 9: return [[name: "list", cmd: "getInstalledApps", wait: '^rx remote: .*ed\\.installedApp\\.get', timeout: 12]]
+        // The search starts after 1 s and reports its outcome at 7 s.
+        case 10: return [[name: "find", cmd: "findTvs", after: 12]]
         default:
             return []
     }
@@ -745,6 +753,7 @@ List<String> traceLines(List<Map> lines) {
         if (l.level != "trace" && !(l.level in ["warn", "error"])) continue
         String msg = l.msg as String
         if (msg.startsWith("rest: ")) msg = msg.replaceAll(' keys=.*', '')
+        if (msg.startsWith("mdns: ")) msg = msg.replaceFirst(/^mdns: name=.*? ip=/, "mdns: name=<name> ip=")
         out << "${(l.ts as String).substring(11)} ${maskLine(msg).take(300)}".toString()
         if (out.size() >= 40) break
     }
@@ -891,6 +900,32 @@ Map evalAppList(List<Map> lines) {
         } catch (e) { }
     }
     return [answered: l != null, apps: count]
+}
+
+// The driver's mDNS trace lines against this TV's address. Only the model and the TXT key names are kept.
+Map evalDiscovery(List<Map> lines, String ip) {
+    List<Map> found = lines.findAll { (it.msg as String).startsWith("mdns: ") }
+    if (!found) {
+        boolean none = lines.any { (it.msg as String).startsWith("No Samsung TV answered") }
+        return [result: none ? "none" : "unsupported"]
+    }
+    for (Map l : found) {
+        def m = (l.msg as String) =~ /^mdns: name=.*? ip=(\S+) manufacturer=.*? model=(.*?) keys=(.*)$/
+        if (m.find() && m.group(1) == ip) return [result: "found", model: m.group(2), keys: m.group(3)]
+    }
+    return [result: "other"]
+}
+
+// The model year from the REST model field ("20_KANTSU2_UHD_BASIC" is 2020); null when it can't be read.
+Integer modelYear(String model) {
+    def m = (model ?: "") =~ /^(\d{2})_/
+    return m.find() ? 2000 + (m.group(1) as int) : null
+}
+
+// TVs from 2018 on announce AirPlay; earlier ones don't. An unknown year sets no expectation.
+Map discoveryExpect(Integer year) {
+    if (year == null) return [:]
+    return [result: [eq: year < 2018 ? "none" : "found"]]
 }
 
 // The model-describing part of a direct /api/v2/ read, under the names a mock profile uses.
@@ -1046,6 +1081,8 @@ Map profileFields(List<Map> results) {
         ((keys[r.test as Integer] ?: []) as List).each { k -> if (obs.containsKey(k)) prof[k] = obs[k] }
         if (obs.otherMessages) other.addAll((obs.otherMessages as String).tokenize(","))
     }
+    Map disc = results.find { it.test == 10 && (it.observed as Map)?.result == "found" }
+    if (disc) prof.airplay = [model: (disc.observed as Map).model]
     if (prof) prof.otherMessages = other.join(",")
     return prof
 }
