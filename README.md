@@ -21,7 +21,8 @@ again. Follow Dave's [installation guide](Docs/Installation.pdf) for the rest.
 
 If the TV isn't found, it is a 2016-2017 TV (no AirPlay), the hub is on another subnet or VLAN, or
 AirPlay is off in the TV's settings. Type the IP instead, ideally with a DHCP reservation. To switch
-to another TV, clear the IP and run **Find TVs**. Discovery is tested on hub firmware 2.5.2 and later.
+to another TV, clear the IP and save, or run **Find TVs**: with several TVs found, pick one under **TV** and
+save. Discovery is tested on hub firmware 2.5.2 and later.
 
 ## Moving from Dave's version
 
