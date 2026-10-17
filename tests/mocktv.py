@@ -350,9 +350,10 @@ async def announce():
                             addresses=[socket.inet_aton(ip)],
                             properties={"manufacturer": "Samsung", "model": model, "deviceid": deviceid},
                             server=AIRPLAY_NAME.replace(" ", "-") + ".local.")
-    await mdns["zc"].async_register_service(info)
+    # a name still held on the network gets a suffix, as real devices do
+    await mdns["zc"].async_register_service(info, allow_name_change=True)
     mdns["info"] = info
-    log(f"mdns: announcing {AIRPLAY_NAME} at {ip}")
+    log(f"mdns: announcing {info.name.split('._airplay')[0]} at {ip}")
 
 async def unannounce(close=False):
     if mdns["info"]:
