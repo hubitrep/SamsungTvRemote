@@ -184,6 +184,68 @@ def saveTvInfo(Map reply) {
 	if (reply.version) { updateDataValue("apiVersion", reply.version) }
 }
 
+//	===== TV discovery =====
+//	pure helpers (no hub calls) so tests/test-driver-helpers.groovy can run them
+
+List<String> ipv4List(def v) {
+	if (v instanceof List) { return v.collect { it as String } }
+	if (v instanceof CharSequence) { return v.toString().split(",").collect { it.trim() }.findAll { it } }
+	return []
+}
+
+//	an _airplay._tcp result that looks like a Samsung TV: [name, ip, model], else null
+Map airplayCandidate(Map r) {
+	String maker = (r?.textRecords?.manufacturer ?: "").toString().toLowerCase()
+	String name = (r?.name ?: "").toString()
+	String ip = ipv4List(r?.ip4Addresses)[0]
+	if (!maker.startsWith("samsung") || name.toLowerCase().contains("soundbar") || !ip) { return null }
+	return [name: name, ip: ip, model: r.textRecords.model as String]
+}
+
+List<Map> airplayCandidates(List results) {
+	Map byIp = [:]
+	results?.each { Map r ->
+		Map c = airplayCandidate(r)
+		if (c && !byIp.containsKey(c.ip)) { byIp[c.ip] = c }
+	}
+	return byIp.values().toList()
+}
+
+//	MAC without separators, upper case; null when not 12 hex digits ("none", blank, missing)
+String normMac(String mac) {
+	String m = mac?.replaceAll("[:.\\-]", "")
+	return (m && m ==~ /[0-9A-Fa-f]{12}/) ? m.toUpperCase() : null
+}
+
+boolean sameTv(String a, String b) {
+	String na = normMac(a)
+	return na != null && na == normMac(b)
+}
+
+//	a configured TV (valid old MAC) that the new MAC does not match
+boolean isTvChange(String oldMac, String newMac) {
+	return normMac(oldMac) != null && !sameTv(oldMac, newMac)
+}
+
+String tvLabel(String restName, String ip) {
+	return "${(restName ?: '').replaceFirst(/^\[TV\] /, '')} (${ip})".toString()
+}
+
+boolean searchDue(Long last, long nowMs, long minMs) {
+	return last == null || nowMs - last >= minMs
+}
+
+boolean repairWanted(String switchValue, Long lastSearch, long nowMs) {
+	return switchValue == "on" && searchDue(lastSearch, nowMs, 300000L)
+}
+
+//	one trace line per result: names and keys only, no other TXT values (serial numbers, ids)
+String mdnsTraceLine(Map r) {
+	Map txt = r?.textRecords instanceof Map ? r.textRecords : [:]
+	return "mdns: name=${r?.name} ip=${ipv4List(r?.ip4Addresses)[0] ?: '-'} manufacturer=${txt.manufacturer ?: '-'} " +
+		"model=${txt.model ?: '-'} keys=${txt.keySet().collect { it as String }.sort().join(',')}".toString()
+}
+
 //	===== Polling/Refresh Capability =====
 def onPoll() {
 	def sendCmdParams = [
