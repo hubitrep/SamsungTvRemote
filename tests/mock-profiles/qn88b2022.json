@@ -1,0 +1,21 @@
+{
+  "_source": "2022 QN88B (QN55QN88BAFXZC, wired): tester report 0.3.0 with driver 2.4.5, posted 2026-10-17. bootS from test 5's firstAnswerMs (20.1 s, 3 Wake-on-LAN sends), an upper bound.",
+  "deviceInfo": {
+    "Language": "en_US",
+    "VoiceSupport": "true",
+    "WallScreenRatio": "-1",
+    "model": "22_PONTUSM_QTV",
+    "modelName": "QN55QN88BAFXZC",
+    "networkType": "wired"
+  },
+  "isSupport": {
+    "remote_voiceControl": "true"
+  },
+  "connectMs": 1801,
+  "wentAway": "REST stopped, PowerState standby",
+  "restAfterOffS": 7,
+  "bootS": 20,
+  "airplay": {
+    "model": "QBQ85D"
+  }
+}

@@ -92,6 +92,7 @@ back the same report, timings aside.
 | `default.json` | 2020 TU7000 | tester report and a direct `/api/v2/` read |
 | `frame2024.json` | 2024 Frame: late set reply, `PowerState` on in art, token stalls the art channel | ha-samsungtv-smart notes; platform string made up |
 | `frame2025.json` | 2025 Frame: `PowerState` standby while showing art | ha-samsungtv-smart release notes; platform string made up |
+| `qn88b2022.json` | 2022 QN88B: reports `PowerState` standby while REST still answers after off | tester report |
 | `nopowerstate.json` | no `PowerState`, REST answers in standby | constructed |
 | `notoken.json` | no token auth, plain `ws` on 8001 | constructed |
 | `refused.json` | the allow dialog refused | constructed |
