@@ -1865,7 +1865,8 @@ def statusParse(mainData) {
 		parseResults << [inputSource: inputSource]
 
 		String tvChannel = mainData.tvChannel.tvChannel.value
-		if (tvChannel == null) { tvChannel = " " }
+		//	older TVs send null for an app, 2025+ send ""
+		if (!tvChannel?.trim()) { tvChannel = " " }
 		String tvChannelName = mainData.tvChannel.tvChannelName.value
 		parseResults << [tvChannel: tvChannel, tvChannelName: tvChannelName]
 		if (tvChannel == " " && tvChannelName != device.currentValue("tvChannelName")) {
@@ -2071,7 +2072,7 @@ def setTvChannel(newChannel) {
 
 // ===== Logging =====
 
-def version() { return "2.4.6" }
+def version() { return "2.4.7" }
 
 def label() { return device.displayName + "-${version()}" }
 

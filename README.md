@@ -53,6 +53,11 @@ it to an installed package with **Modify**.
 
 ## Changes
 
+### 2.4.7 (beta)
+
+- SmartThings: on 2025 and later TVs, the driver looks up the app that is playing, as it does on
+  older TVs. Before, `appName` stayed unset and `nowPlaying` read `null: <app code>`.
+
 ### 2.4.6 (beta)
 
 - SmartThings: the picture and sound mode lists used by the toggle commands refresh while the TV

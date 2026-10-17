@@ -1,12 +1,12 @@
 {
   "packageName": "Samsung TV Remote (hubitrep)",
   "author": "hubitrep (original by Dave Gutheinz)",
-  "version": "2.4.6",
+  "version": "2.4.7",
   "minimumHEVersion": "2.3.9",
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
   "communityLink": "https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829",
   "dateReleased": "2026-10-17",
-  "releaseNotes": "Beta. SmartThings: the picture and sound mode lists refresh while the TV is on; saved with the TV off, a 2025 TV listed only one sound mode. Full list in the README.",
+  "releaseNotes": "Beta. SmartThings: on 2025 and later TVs, the driver looks up the app that is playing, as on older TVs. Full list in the README.",
   "drivers": [
     {
       "id": "70c694f2-d2cb-4c00-9357-28376f9c794f",
@@ -14,7 +14,7 @@
       "namespace": "davegut",
       "location": "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVRemote.groovy",
       "required": true,
-      "version": "2.4.6"
+      "version": "2.4.7"
     }
   ],
   "apps": [
