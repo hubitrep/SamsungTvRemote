@@ -30,6 +30,7 @@ List<String> SIGNATURES = [
     'String normMac(String mac) {',
     'boolean sameTv(String a, String b) {',
     'boolean isTvChange(String oldMac, String newMac) {',
+    'List<Map> uniqueTvs(List<Map> found) {',
     'String tvLabel(String restName, String ip) {',
     'boolean searchDue(Long last, long nowMs, long minMs) {',
     'boolean repairWanted(String switchValue, Long lastSearch, long nowMs) {',
@@ -70,6 +71,12 @@ check 'invalid is null', [null, "", "none", "8c:ea:48"].every { h.normMac(it) ==
 check 'sameTv', h.sameTv("8c:ea:48:00:00:01", "8CEA48000001") && !h.sameTv("none", "none") && !h.sameTv(null, null)
 check 'isTvChange', h.isTvChange("8CEA48000001", "8CEA48000002") && !h.isTvChange(null, "8CEA48000002")  // focus 5
 check 'same TV, other format', !h.isTvChange("8CEA48000001", "8c:ea:48:00:00:01")
+
+println 'uniqueTvs'
+List<Map> two = [[ip: "192.0.2.10", mac: "8c:ea:48:00:00:01"], [ip: "192.0.2.20", mac: "8CEA48000001"]]
+check 'same MAC at two IPs, first wins', h.uniqueTvs(two) == [two[0]]
+check 'different MACs kept', h.uniqueTvs([two[0], [ip: "192.0.2.30", mac: "8CEA48000002"]]).size() == 2
+check 'null', h.uniqueTvs(null) == []
 
 println 'tvLabel'
 check 'prefix removed, ip appended', h.tvLabel("[TV] Living room", "192.0.2.10") == "Living room (192.0.2.10)"

@@ -89,6 +89,7 @@ def initialize() {
 
 def updated() {
 	unschedule()
+	searchMem.remove(device.id as String)
 	close()
 	["wsQueue", "currentFunction", "pendingPowerHold", "powerProbeAt",
 	 "wsData", "standbyTest", "configured", "onPollCount"].each { state.remove(it) }
@@ -242,6 +243,16 @@ boolean isTvChange(String oldMac, String newMac) {
 	return normMac(oldMac) != null && !sameTv(oldMac, newMac)
 }
 
+//	one entry per TV (by MAC), first wins: a TV can answer at two addresses
+List<Map> uniqueTvs(List<Map> found) {
+	Map<String, Map> byMac = [:]
+	found?.each { Map f ->
+		String k = normMac(f?.mac as String)
+		if (k && !byMac.containsKey(k)) { byMac[k] = f }
+	}
+	return byMac.values().toList()
+}
+
 String tvLabel(String restName, String ip) {
 	return "${(restName ?: '').replaceFirst(/^\[TV\] /, '')} (${ip})".toString()
 }
@@ -310,8 +321,12 @@ void confirmTvParse(resp, Map data) {
 void finishSearch() {
 	Map m = searchMem.remove(device.id as String)
 	if (m == null) { return }
-	List<Map> found = m.found
+	List<Map> found = uniqueTvs(m.found as List<Map>)
 	if (m.purpose == "setup") {
+		state.remove("foundTvs")
+		state.remove("foundTvIps")
+		String pick = settings?.tvChoice
+		if (pick && !found.any { it.mac == pick }) { device.removeSetting("tvChoice") }
 		if (found.isEmpty()) {
 			logWarn("No Samsung TV answered. The TV must be on, on the same network as the hub, " +
 				"with AirPlay on. 2016-2017 TVs need the IP typed.")
@@ -356,6 +371,7 @@ void applyTv(String ip, String mac) {
 //	a TV that was on has stopped answering: look for it at another address
 void maybeRepair(String reason) {
 	if (!getDataValue("deviceMac")) { return }
+	if (searchMem.containsKey(device.id as String)) { return }
 	if (!repairWanted(device.currentValue("switch"), state.lastSearch as Long, now())) { return }
 	logDebug([method: "maybeRepair", reason: reason])
 	runIn(1, "runRepairSearch", [data: [reason: reason]])
@@ -369,6 +385,8 @@ void runRepairSearch(Map data = null) {
 //	on() got no answer from the TV in 30 s
 void powerOnRepair() {
 	if (!state.powerOnAt) { return }
+	if (!getDataValue("deviceMac")) { return }
+	if (searchMem.containsKey(device.id as String)) { return }
 	if (searchDue(state.lastSearch as Long, now(), 300000L)) { runRepairSearch() }
 }
 
