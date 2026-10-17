@@ -1788,11 +1788,14 @@ def getDeviceListParse(resp, data) {
 def deviceSetupParse(mainData) {
 	def setupData = [:]
 	
-	def pictureModes = mainData["custom.picturemode"]?.supportedPictureModes?.value
+	//	2025+ Samsung TVs report modes in samsungvd.pictureMode / samsungvd.soundMode instead of custom.*
+	state.pictureModeCap = mainData["custom.picturemode"] ? "custom.picturemode" : "samsungvd.pictureMode"
+	state.soundModeCap = mainData["custom.soundmode"] ? "custom.soundmode" : "samsungvd.soundMode"
+	def pictureModes = mainData[state.pictureModeCap]?.supportedPictureModes?.value
 	state.pictureModes = pictureModes
 	setupData << [pictureModes: pictureModes]
 	
-	def soundModes =  mainData["custom.soundmode"]?.supportedSoundModes?.value
+	def soundModes = mainData[state.soundModeCap]?.supportedSoundModes?.value
 	state.soundModes = soundModes
 	setupData << [soundModes: soundModes]
 	
@@ -1874,11 +1877,15 @@ def statusParse(mainData) {
 		sendEvent(name: "tvChannel", value: tvChannel)
 		sendEvent(name: "tvChannelName", value: tvChannelName)
 
-		String pictureMode = mainData["custom.picturemode"].pictureMode.value
+		String pictureCap = mainData["custom.picturemode"] ? "custom.picturemode" : "samsungvd.pictureMode"
+		state.pictureModeCap = pictureCap
+		String pictureMode = mainData[pictureCap]?.pictureMode?.value
 		sendEvent(name: "pictureMode",value: pictureMode)
 		parseResults << [pictureMode: pictureMode]
 
-		String soundMode = mainData["custom.soundmode"].soundMode.value
+		String soundCap = mainData["custom.soundmode"] ? "custom.soundmode" : "samsungvd.soundMode"
+		state.soundModeCap = soundCap
+		String soundMode = mainData[soundCap]?.soundMode?.value
 		sendEvent(name: "soundMode",value: soundMode)
 		parseResults << [soundMode: soundMode]
 	}
@@ -1997,7 +2004,7 @@ def togglePictureMode() {
 def setPictureMode(pictureMode) {
 	def cmdData = [
 		component: "main",
-		capability: "custom.picturemode",
+		capability: state.pictureModeCap ?: "custom.picturemode",
 		command: "setPictureMode",
 		arguments: [pictureMode]]
 	deviceCommand(cmdData)
@@ -2021,7 +2028,7 @@ def toggleSoundMode() {
 def setSoundMode(soundMode) { 
 	def cmdData = [
 		component: "main",
-		capability: "custom.soundmode",
+		capability: state.soundModeCap ?: "custom.soundmode",
 		command: "setSoundMode",
 		arguments: [soundMode]]
 	deviceCommand(cmdData)
@@ -2059,7 +2066,7 @@ def setTvChannel(newChannel) {
 
 // ===== Logging =====
 
-def version() { return "2.4.4" }
+def version() { return "2.4.5" }
 
 def label() { return device.displayName + "-${version()}" }
 

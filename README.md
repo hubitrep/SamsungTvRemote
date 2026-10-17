@@ -53,6 +53,11 @@ it to an installed package with **Modify**.
 
 ## Changes
 
+### 2.4.5 (beta)
+
+- SmartThings: picture and sound mode work on TVs that report them as `samsungvd.pictureMode` and
+  `samsungvd.soundMode` (2025 models). Before, the SmartThings poll failed on those TVs.
+
 ### 2.4.4 (beta)
 
 - With the IP left blank, Save finds the TV over mDNS (AirPlay) and confirms it with a request to
