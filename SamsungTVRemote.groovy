@@ -331,8 +331,16 @@ void finishSearch() {
 			state.foundTvIps = found.collectEntries { [(it.mac): it.ip] }
 			logInfo("Found ${found.size()} TVs: choose one under TV and save")
 		}
+	} else if (m.purpose == "repair") {
+		Map tv = found.find { sameTv(getDataValue("deviceMac"), it.mac as String) }
+		if (tv) {
+			logInfo("TV moved from ${deviceIp} to ${tv.ip}")
+			device.updateSetting("deviceIp", [type: "text", value: tv.ip as String])
+			runIn(1, "onPoll")
+		} else {
+			logDebug([method: "finishSearch", repair: "TV not found"])
+		}
 	}
-	//	Task 3: else if (m.purpose == "repair") { ... }
 }
 
 //	use this TV; a different TV than the one configured starts over on pairing
@@ -343,6 +351,25 @@ void applyTv(String ip, String mac) {
 	}
 	device.updateSetting("deviceIp", [type: "text", value: ip])
 	runIn(1, "updated")
+}
+
+//	a TV that was on has stopped answering: look for it at another address
+void maybeRepair(String reason) {
+	if (!getDataValue("deviceMac")) { return }
+	if (!repairWanted(device.currentValue("switch"), state.lastSearch as Long, now())) { return }
+	logDebug([method: "maybeRepair", reason: reason])
+	runIn(1, "runRepairSearch", [data: [reason: reason]])
+}
+
+void runRepairSearch(Map data = null) {
+	logDebug([method: "runRepairSearch", reason: data?.reason ?: "powerOn"])
+	confirmTvs(searchTvs().findAll { it.ip != deviceIp }, "repair")
+}
+
+//	on() got no answer from the TV in 30 s
+void powerOnRepair() {
+	if (!state.powerOnAt) { return }
+	if (searchDue(state.lastSearch as Long, now(), 300000L)) { runRepairSearch() }
 }
 
 def findTvs() { runIn(1, "runSetupSearch") }
@@ -403,6 +430,7 @@ def onPollParse(resp, data) {
 			logDebug([method: "onPollParse", error: "unparsable reply"])
 		}
 	}
+	if (info == null) { maybeRepair("poll") }
 	if (info != null) {
 		powerState = info.PowerState
 		String reported = (powerState != null).toString()
@@ -489,6 +517,7 @@ def on() {
 	//	the TV takes several seconds to boot; WoL over Wi-Fi is often missed, so resend
 	runIn(10, onPollWol)
 	runIn(20, onPollAgain)
+	runIn(30, "powerOnRepair")
 	//	after the 10 s poll has answered or timed out (6 s)
 	if (stConnected()) { runIn(17, stPowerOn) }
 }
@@ -1064,6 +1093,7 @@ def wsFailed() {
 	//	only a remote-socket failure indicates TV power state
 	if (s.funct == "remote") {
 		state.lastWsFailure = now()
+		maybeRepair("socket")
 		if (s.probeAt) {
 			s.probeAt = null
 			probeFailed()
