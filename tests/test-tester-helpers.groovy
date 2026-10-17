@@ -104,6 +104,8 @@ check 'names', h.maskLine('{"name": "[TV] Living room", "deviceName": "SGVsbG8="
 check 'token', h.maskLine('{"token": 12345678}') == '{"token":"<token>"}'
 check 'already masked token kept', h.maskLine('{"token":"<token>"}') == '{"token":"<token>"}'
 check 'version kept', h.maskLine('"version": "2.0.25"') == '"version": "2.0.25"'
+check 'DNI mac', h.maskLine('dni:F47B09123456 x') == 'dni:<mac> x'
+check 'app code kept', h.maskLine('appCode:111299001912') == 'appCode:111299001912'
 
 println 'traceLines'
 List<String> tl = h.traceLines([line('20:58:00.099', 'rest: status=200 ms=27 PowerState=on keys=A,B,C'),

@@ -106,6 +106,7 @@ def updated() {
 	def updStatus = [:]
 	if (!deviceIp) {
 		logInfo("Searching the network for the TV")
+		if (logEnable || traceLog) { runIn(1800, debugLogOff) }
 		runIn(1, "runSetupSearch")
 		updStatus << [status: "ERROR", data: "Device IP not set."]
 	} else {
@@ -165,7 +166,7 @@ def configure() {
 		try {
 			device.setDeviceNetworkId(alternateWolMac)
 		} catch (e) {
-			logWarn("configure: [setDeviceNetworkId: ${alternateWolMac}, error: ${e}]")
+			logWarn("configure: [setDeviceNetworkId: failed, error: ${e}]")
 		}
 		def modelYear = "20" + tvData.device.model[0..1]
 		updateDataValue("modelYear", modelYear)
@@ -182,7 +183,7 @@ def configure() {
 		updateDataValue("uuid", uuid)
 		saveTvInfo(tvData)
 		updateDataValue("powerStateReported", (tvData.device.PowerState != null).toString())
-		respData << [status: "OK", dni: alternateWolMac, modelYear: modelYear,
+		respData << [status: "OK", modelYear: modelYear,
 					 frameTv: frameTv, tokenSupport: tokenSupport]
 		sendEvent(name: "artModeStatus", value: "none")		//	getArtModeStatus (scheduled above) asks a Frame
 	} else {
@@ -332,7 +333,7 @@ void finishSearch() {
 				"with AirPlay on. 2016-2017 TVs need the IP typed.")
 		} else if (found.size() == 1) {
 			Map tv = found[0]
-			String msg = "Found ${tv.label}".toString()
+			String msg = "Found a TV at ${tv.ip}".toString()
 			if (!deviceIp) {
 				logInfo(msg)
 				applyTv(tv.ip as String, tv.mac as String)
@@ -1074,7 +1075,7 @@ def close() {
 def webSocketStatus(message) {
 	Map s = ws()
 	Map logData = [method: "webSocketStatus", message: message, funct: s.funct]
-	logTrace("ws ${s.funct}: ${message}")
+	logTrace("ws ${s.funct}: ${redact(message)}")
 	if (message.startsWith("status: open")) {
 		s.phase = "open"
 		s.connectingAt = null
@@ -1185,7 +1186,7 @@ def probeOpened() { setPowerState("on", [method: "probePower", powerState: "abse
 def probeFailed() { setPowerState("off", [method: "probePower", powerState: "absent/wsFailed"]) }
 
 def parse(resp) {
-	logTrace("rx ${ws().funct}: ${maskToken(resp)}")
+	logTrace("rx ${ws().funct}: ${redact(resp)}")
 	def logData = [method: "parse"]
 	try {
 		resp = parseJson(resp)
@@ -1230,7 +1231,7 @@ def parse(resp) {
 				def payload = resp.data
 				if (payload instanceof String) { payload = parseJson(payload) }
 				def appList = payload?.data
-				logInfo("ed.installedApp.get: [count: ${appList ? appList.size() : 0}, apps: ${appList?.collect { [name: it.name, appId: it.appId] }}]")
+				logInfo("ed.installedApp.get: [count: ${appList ? appList.size() : 0}]")
 				break
 			case "ms.channel.unauthorized":
 				//	token rejected; reset to the placeholder so the next connect prompts
@@ -1251,7 +1252,7 @@ def parse(resp) {
 			case "ms.remote.touchDisable":
 				break
 			default:
-				logData << [STATUS: "Not Parsed", DATA: resp.data]
+				logData << [STATUS: "Not Parsed", EVENT: event]
 				break
 		}
 		logDebug(logData)
@@ -1519,6 +1520,7 @@ def updateAppName(tvName = device.currentValue("tvChannelName")) {
 	}
 	sendEvent(name: "appName", value: appName)
 	sendEvent(name: "appId", value: appId)
+	updateTitle()
 	logDebug(logData)
 }
 
@@ -1681,7 +1683,10 @@ def stPreferences() {
 	if (connectST) {
 		input ("stApiKey", "string", title: "SmartThings API Key", defaultValue: "")
 		if (stApiKey) {
-			input ("stDeviceId", "string", title: "SmartThings Device ID", defaultValue: "")
+			if ((state?.stTvs as Map)?.size() > 1) {
+				input ("stTvChoice", "enum", title: "SmartThings TV", options: state.stTvs)
+			}
+			input ("stDeviceId", "string", title: "SmartThings Device ID (leave blank to find it)", defaultValue: "")
 		}
 		input ("stPollInterval", "enum", title: "SmartThings Poll Interval (minutes)",
 			   options: ["off", "1", "5", "15", "30"], defaultValue: "15")
@@ -1707,6 +1712,14 @@ def stAuthFailed() {
 def stUpdate() {
 	def stData = [:]
 	state.remove("stAuthFailed")		//	a Save retries the key
+	String stPick = settings?.stTvChoice
+	if (stPick && state.stTvs?.get(stPick)) {
+		device.updateSetting("stDeviceId", [type: "string", value: stPick])
+		device.removeSetting("stTvChoice")
+		state.remove("stTvs")
+		runIn(1, stUpdate)				//	the next run reads the new setting
+		return
+	}
 	if (connectST) {
 		stData << [connectST: connectST]
 		if (!stApiKey || stApiKey == "") {
@@ -1714,8 +1727,7 @@ def stUpdate() {
 			stData << [status: "ERROR", data: "no stApiKey"]
 		} else if (!stDeviceId || stDeviceId == "") {
 			getDeviceList()
-			logWarn("\n\n\t\t<b>Enter the deviceId from the log List and Save Preferences</b>\n\n")
-			stData << [status: "ERROR", data: "no stDeviceId"]
+			stData << [status: "finding the TV in SmartThings"]
 		} else {
 			def stPollInterval = stPollInterval
 			if (stPollInterval == null) { 
@@ -1769,19 +1781,27 @@ def getDeviceListParse(resp, data) {
 		try {
 			respData = new JsonSlurper().parseText(resp.data)
 		} catch (err) {
-			respData = [status: "ERROR",
-						errorMsg: err,
-						respData: resp.data]
+			respData = [status: "ERROR", errorMsg: err]
 		}
 	}
 	if (respData.status == "ERROR") {
 		logWarn("getDeviceListParse: ${respData}")
+		return
+	}
+	//	TVs only, never the account's other devices (same filter as ha-samsungtv-smart)
+	Map tvs = respData.items.findAll {
+		it.type == "OCF" && it.deviceTypeName in ["Samsung OCF TV", "x.com.st.d.monitor"]
+	}.collectEntries { [(it.deviceId): it.label ?: it.name] }
+	if (tvs.size() == 1) {
+		device.updateSetting("stDeviceId", [type: "string", value: tvs.keySet().first()])
+		state.remove("stTvs")
+		logInfo("SmartThings: using the account's only TV")
+		runIn(1, stUpdate)
+	} else if (tvs.size() > 1) {
+		state.stTvs = tvs
+		logWarn("SmartThings: ${tvs.size()} TVs on the account. Pick one under SmartThings TV and save.")
 	} else {
-		log.info ""
-		respData.items.each {
-			log.trace "${it.label}:   ${it.deviceId}"
-		}
-		log.trace "<b>Copy your device's deviceId value and enter into the device Preferences.</b>"
+		logWarn("SmartThings: no TV found on the account. Enter the SmartThings Device ID and save.")
 	}
 }
 
@@ -1843,7 +1863,8 @@ def statusParse(mainData) {
 	Map logData = [method: "statusParse"]
 	if (stTestData) {
 		device.updateSetting("stTestData", [type:"bool", value: false])
-		logInfo([stTestData: mainData])
+		//	without the TV's identity (ocf) and with ids, names and MACs masked
+		logInfo("stTestData: ${redact(JsonOutput.toJson(mainData.findAll { it.key != "ocf" }), false)}")
 	}
 	String onOff = mainData.switch.switch.value
 	Map parseResults = [:]
@@ -1869,11 +1890,15 @@ def statusParse(mainData) {
 		if (!tvChannel?.trim()) { tvChannel = " " }
 		String tvChannelName = mainData.tvChannel.tvChannelName.value
 		parseResults << [tvChannel: tvChannel, tvChannelName: tvChannelName]
-		if (tvChannel == " " && tvChannelName != device.currentValue("tvChannelName")) {
-			//	a blank tvChannel means an app; tvChannelName is then the app code (SmartThings)
-			if (tvChannelName.contains(".")) {
+		if (tvChannel == " ") {
+			//	a blank tvChannel means an app; tvChannelName is then the app code (SmartThings).
+			//	Look each code up once, also when the attribute already held it before an upgrade.
+			if (tvChannelName?.contains(".") && tvChannelName != state.appLookedUp) {
+				state.appLookedUp = tvChannelName
 				runIn(2, updateAppName)
 			}
+		} else {
+			state.remove("appLookedUp")
 		}
 		sendEvent(name: "tvChannel", value: tvChannel)
 		sendEvent(name: "tvChannelName", value: tvChannelName)
@@ -1928,9 +1953,7 @@ def distResp(resp, data) {
 				statusParse(respData.components.main)
 			}
 		} catch (err) {
-			resplog << [status: "ERROR",
-						errorMsg: err,
-						respData: resp.data]
+			resplog << [status: "ERROR", errorMsg: err]
 		}
 	} else if (resp.status == 401) {
 		stAuthFailed()
@@ -2072,7 +2095,7 @@ def setTvChannel(newChannel) {
 
 // ===== Logging =====
 
-def version() { return "2.4.7" }
+def version() { return "2.4.8" }
 
 def label() { return device.displayName + "-${version()}" }
 
@@ -2080,9 +2103,14 @@ def logTrace(msg) {
 	if (traceLog) { log.trace "${label()}: ${msg}" }
 }
 
-//	trace lines carry protocol text; the token never goes into a log
-String maskToken(String s) {
-	return s?.replaceAll(/"token"\s*:\s*"?[^",}]*"?/, '"token":"<token>"')
+//	the token, ids and MACs never go into a log; in protocol traces neither do the names of
+//	other devices connected to the TV (names = false keeps mode and input names in the ST dump)
+String redact(String s, boolean names = true) {
+	String out = s?.replaceAll(/"token"\s*:\s*"?[^",\x7D]*"?/, '"token":"<token>"')
+		?.replaceAll(/token=[^&\s"]*/, 'token=<token>')
+		?.replaceAll(/[0-9a-fA-F]{6,8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{6,12}/, '<id>')
+		?.replaceAll(/([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}/, '<mac>')
+	return names ? out?.replaceAll(/"(deviceName|name)"\s*:\s*"[^"]*"/, '"$1":"<name>"') : out
 }
 
 def logInfo(msg) { 

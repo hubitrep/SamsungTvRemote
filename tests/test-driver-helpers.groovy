@@ -35,6 +35,7 @@ List<String> SIGNATURES = [
     'boolean searchDue(Long last, long nowMs, long minMs) {',
     'boolean repairWanted(String switchValue, Long lastSearch, long nowMs) {',
     'String mdnsTraceLine(Map r) {',
+    'String redact(String s, boolean names = true) {',
 ]
 def h = new GroovyShell().parse(SIGNATURES.collect { extract(text, it) }.join("\n") + "\nreturn this\n").run()
 
@@ -91,6 +92,15 @@ println 'mdnsTraceLine'
 check 'line', h.mdnsTraceLine(tv) == "mdns: name=Living room ip=192.0.2.10 manufacturer=Samsung model=UTU7000 keys=deviceid,manufacturer,model,serialNumber"
 check 'no TXT values beyond those', !h.mdnsTraceLine(tv).contains("02:00:00:00:00:AA")
 check 'missing fields', h.mdnsTraceLine([name: "X"]) == "mdns: name=X ip=- manufacturer=- model=- keys="
+
+println 'redact'
+check 'token key', h.redact('{"token":"12345678"}') == '{"token":"<token>"}'
+check 'token in url', h.redact('wss://x:8002/api?name=abc&token=12345678') == 'wss://x:8002/api?name=abc&token=<token>'
+check 'names', h.redact('{"deviceName":"Kurt iPhone","name":"SGk="}') == '{"deviceName":"<name>","name":"<name>"}'
+check 'uuid', h.redact('"id":"e263b65-88ad-409f-8842-1be9a727a347"') == '"id":"<id>"'
+check 'mac', h.redact('"mac":"f4:7b:09:12:34:56"') == '"mac":"<mac>"'
+check 'names kept when asked', h.redact('{"name":"Movie","id":"e263b65-88ad-409f-8842-1be9a727a347"}', false) == '{"name":"Movie","id":"<id>"}'
+check 'values kept', h.redact('{"pictureMode":{"value":"AI Optimized"},"volume":21}') == '{"pictureMode":{"value":"AI Optimized"},"volume":21}'
 
 println "\n${pass} passed, ${fail} failed"
 System.exit(fail ? 1 : 0)

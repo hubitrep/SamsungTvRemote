@@ -26,7 +26,7 @@ import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.text.SimpleDateFormat
 
-@Field static final String CODE_VERSION = "0.3.0"
+@Field static final String CODE_VERSION = "0.3.1"
 
 @Field static final String BUSY = "a run is in progress"
 
@@ -292,7 +292,7 @@ void finishRun(String status, String reason) {
     Map run = state.run as Map
     if (run?.status != "running") return       // a stale Abort after the run ended changes nothing
     run.status = status
-    run.reason = reason
+    run.reason = maskLine(reason as String)     // an error text can carry the TV's IP
     state.run = run
     Map ctx = run.ctx as Map
     try {
@@ -309,7 +309,7 @@ void finishRun(String status, String reason) {
         state.report = buildReport(state.run as Map)
     } catch (e) {
         logError "Report failed: ${e}"
-        state.report = "Samsung TV Remote Tester report\nrun ${status}; the report could not be built: ${e.message}"
+        state.report = "Samsung TV Remote Tester report\nrun ${status}; the report could not be built: ${maskLine(e.message)}"
     }
     logCmd "Run ${status}${reason ? ': ' + reason : ''}"
 }
@@ -738,8 +738,9 @@ Long tsMs(String ts, TimeZone tz) {
 String maskLine(String s) {
     if (s == null) return null
     String out = s.replaceAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/, "<ip>")
-    out = out.replaceAll(/\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b/, "<mac>")
+    out = out.replaceAll(/\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b/, "<mac>")
     out = out.replaceAll(/\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b/, "<uuid>")
+    out = out.replaceAll(/\b(?=[0-9A-Fa-f]*[A-Fa-f])[0-9A-Fa-f]{12}\b/, "<mac>")    // a DNI; app codes are all digits
     out = out.replaceAll(/"(name|deviceName|ssid)"\s*:\s*"[^"]*"/, '"$1":"<name>"')
     out = out.replaceAll(/"token"\s*:\s*"?[^",\x7D<]+"?/, '"token":"<token>"')
     out = out.replaceAll(/(?:0x)?[0-9A-Fa-f]{33,}/, "<hex>")

@@ -53,6 +53,14 @@ it to an installed package with **Modify**.
 
 ## Changes
 
+### 2.4.8 (beta)
+
+- SmartThings: `appName` and `nowPlaying` show the playing app right after the upgrade; 2.4.7
+  waited for the app to change.
+- SmartThings: leave the Device ID blank and the driver finds the TV on the account. With several
+  TVs, pick one under SmartThings TV and save again.
+- Tidier logging in the driver and in the Tester (0.3.1).
+
 ### 2.4.7 (beta)
 
 - SmartThings: on 2025 and later TVs, the driver looks up the app that is playing, as it does on
