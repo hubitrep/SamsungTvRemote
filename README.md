@@ -15,7 +15,13 @@ Support thread: [[BETA] Samsung TV Remote (2016 and later TVs)](https://communit
 - **Manually:** Drivers Code → New Driver → Import, with
   `https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVRemote.groovy`.
 
-Then follow Dave's [installation guide](Docs/Installation.pdf).
+Then add a virtual device with the Samsung TV Remote driver, turn the TV on, leave the IP blank and
+click Save. The driver finds the TV on the network; with several TVs, pick one under **TV** and save
+again. Follow Dave's [installation guide](Docs/Installation.pdf) for the rest.
+
+If the TV isn't found, it is a 2016-2017 TV (no AirPlay), the hub is on another subnet or VLAN, or
+AirPlay is off in the TV's settings. Type the IP instead, ideally with a DHCP reservation. To switch
+to another TV, clear the IP and run **Find TVs**. Discovery is tested on hub firmware 2.5.2 and later.
 
 ## Moving from Dave's version
 
@@ -40,6 +46,15 @@ writes a report to paste in the support thread. See [tests/README.md](tests/READ
 it to an installed package with **Modify**.
 
 ## Changes
+
+### Unreleased
+
+- With the IP left blank, Save finds the TV over mDNS (AirPlay) and confirms it with a request to
+  the TV's REST API. With several TVs, pick one under **TV** and save.
+- When a TV that was on stops answering, the driver looks for it again and follows it to its new
+  IP, matching it by MAC. It searches at most once every 5 minutes.
+- New command **Find TVs** searches again and logs the TVs found.
+- The tester gained a Discovery test.
 
 ### 2.4.3 (beta)
 
