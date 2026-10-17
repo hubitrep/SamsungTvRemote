@@ -600,8 +600,8 @@ List<Map> stepsFor(int test, Map run) {
         case 8: return [[name: "launch", cmd: "appOpenByName", args: [run.ctx.app ?: "YouTube"], wait: '^app: POST', timeout: 25, after: 5],
                         [name: "close", cmd: "appClose", wait: '^app: DELETE', timeout: 15, after: 2]]
         case 9: return [[name: "list", cmd: "getInstalledApps", wait: '^rx remote: .*ed\\.installedApp\\.get', timeout: 12]]
-        // The search starts after 1 s and reports its outcome at 7 s.
-        case 10: return [[name: "find", cmd: "findTvs", after: 12]]
+        // The search starts after 1 s, blocks up to 6 s, and its outcome (logged last, at info or warn) follows 7 s later.
+        case 10: return [[name: "find", cmd: "findTvs", wait: '^(No Samsung TV answered|Found )', timeout: 20, after: 1]]
         default:
             return []
     }
