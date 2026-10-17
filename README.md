@@ -24,6 +24,11 @@ AirPlay is off in the TV's settings. Type the IP instead, ideally with a DHCP re
 to another TV, clear the IP and save, or run **Find TVs**: with several TVs found, pick one under **TV** and
 save. Discovery is tested on hub firmware 2.5.2 and later.
 
+After a power cut the hub may not find the TV again until the hub restarts: a TV that drops off the
+network without signing off, then comes back under the same name, is missing from the hub's search
+results. Standby is not affected: the TV signs off when it goes to standby. A DHCP reservation
+keeps the TV reachable either way.
+
 ## Moving from Dave's version
 
 The driver keeps its name (`Samsung TV Remote`) and namespace (`davegut`), so existing devices keep
