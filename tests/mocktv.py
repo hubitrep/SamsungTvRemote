@@ -4,11 +4,12 @@
 # xchwarze/samsung-tv-ws-api, the decompiled Frame notes in TheFab21/ha-samsungtv-smart, and a
 # 2020 TU7000. No code is taken from either project.
 #
-# usage: [MOCKTV_PROFILE=<profile.json>] mocktv.py <cert.pem> <key.pem> <workdir>
+# usage: [MOCKTV_PROFILE=<profile.json>] [MOCKTV_AIRPLAY_NAME=<name>] [MOCKTV_IP=<ipv4>] mocktv.py <cert.pem> <key.pem> <workdir>
 # A profile describes a TV with the tester report's field names; mock-profiles/default.json fills
 # what it leaves out. Control: GET http://<mock>:8001/mock/state, /mock/power?to=on|standby,
 # /mock/profile?name=<file in mock-profiles, without .json>, /mock/unpair.
-import asyncio, json, os, random, ssl, sys, time, uuid
+# With MOCKTV_AIRPLAY_NAME set it announces <name>._airplay._tcp over mDNS while on (needs zeroconf).
+import asyncio, json, os, random, socket, ssl, sys, time, uuid
 from aiohttp import web, WSMsgType
 
 CERT, KEY, WORK = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -23,6 +24,8 @@ TOKEN_FILE = os.path.join(WORK, "token.txt")
 if os.path.exists(TOKEN_FILE):
     tv["token"] = open(TOKEN_FILE).read().strip() or None
 sockets = set()        # (ws, channel)
+AIRPLAY_NAME = os.environ.get("MOCKTV_AIRPLAY_NAME")
+mdns = {"zc": None, "info": None}
 
 def log(*a):
     print(time.strftime("%H:%M:%S"), *a, flush=True)
@@ -123,6 +126,7 @@ async def broadcast_art(inner):
 
 async def go_standby(reason):
     log("power: standby", f"({reason})")
+    await unannounce()
     tv["power"], tv["app"], tv["shutdownAt"] = "standby", None, time.monotonic()
     if frame():
         tv["art"] = "off"
@@ -138,6 +142,7 @@ async def boot():
     await asyncio.sleep(wake)
     tv["power"], tv["booting"], tv["shutdownAt"] = "on", False, None
     log("power: on")
+    await announce()
 
 async def channel(request):
     name = request.match_info["channel"]
@@ -289,6 +294,7 @@ async def mock_power(request):
     if to == "on":
         tv["power"], tv["shutdownAt"] = "on", None
         log("power: on (control)")
+        await announce()
     elif to == "standby":
         await go_standby("control")
     else:
@@ -317,6 +323,46 @@ class Wol(asyncio.DatagramProtocol):
             log("wol: magic packet from", addr[0])
             asyncio.ensure_future(boot())
 
+def lan_ip():
+    # the address of the interface on the default route; connect() on UDP sends nothing
+    if os.environ.get("MOCKTV_IP"):
+        return os.environ["MOCKTV_IP"]
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))
+        return s.getsockname()[0]
+    finally:
+        s.close()
+
+async def announce():
+    # real TVs' TXT deviceid isn't the MAC, so the mock's differs from it in the last byte
+    if not AIRPLAY_NAME or mdns["info"]:
+        return
+    from zeroconf import IPVersion
+    from zeroconf.asyncio import AsyncServiceInfo, AsyncZeroconf
+    if not mdns["zc"]:
+        mdns["zc"] = AsyncZeroconf(ip_version=IPVersion.V4Only)
+    parts = MAC.split(":")
+    deviceid = ":".join(parts[:-1] + [f"{int(parts[-1], 16) ^ 0xff:02x}"])
+    ip = lan_ip()
+    model = (P.get("airplay") or {}).get("model", "UMOCK")
+    info = AsyncServiceInfo("_airplay._tcp.local.", f"{AIRPLAY_NAME}._airplay._tcp.local.", port=47941,
+                            addresses=[socket.inet_aton(ip)],
+                            properties={"manufacturer": "Samsung", "model": model, "deviceid": deviceid},
+                            server=AIRPLAY_NAME.replace(" ", "-") + ".local.")
+    await mdns["zc"].async_register_service(info)
+    mdns["info"] = info
+    log(f"mdns: announcing {AIRPLAY_NAME} at {ip}")
+
+async def unannounce(close=False):
+    if mdns["info"]:
+        await (await mdns["zc"].async_unregister_service(mdns["info"]))
+        mdns["info"] = None
+        log("mdns: withdrawn")
+    if close and mdns["zc"]:
+        await mdns["zc"].async_close()
+        mdns["zc"] = None
+
 async def main():
     load_profile(os.environ.get("MOCKTV_PROFILE"))
     app = web.Application()
@@ -337,7 +383,12 @@ async def main():
     for port in (9, 7):
         await loop.create_datagram_endpoint(Wol, local_addr=("0.0.0.0", port), allow_broadcast=True)
     log(f"mock TV up: REST/ws 8001, wss 8002, WoL 9/7, MAC {MAC}")
-    await asyncio.Event().wait()
+    try:
+        if tv["power"] == "on":
+            await announce()
+        await asyncio.Event().wait()
+    finally:
+        await unannounce(close=True)
 
 if __name__ == "__main__":
     asyncio.run(main())

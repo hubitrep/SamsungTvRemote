@@ -40,7 +40,7 @@ messages captured from real TVs: the fixtures in
 [ha-samsungtv-smart](https://github.com/TheFab21/ha-samsungtv-smart), and a 2020 TU7000.
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install aiohttp
+python3 -m venv .venv && .venv/bin/pip install aiohttp zeroconf
 openssl req -x509 -newkey rsa:2048 -nodes -keyout tv.key -out tv.pem -days 365 -subj "/CN=mocktv"
 .venv/bin/python tests/mocktv.py tv.pem tv.key <workdir>
 ```
@@ -48,6 +48,12 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout tv.key -out tv.pem -days 365 -
 Run it on a machine on the hub's subnet (Wake-on-LAN is a broadcast) and set the device's TV IP to
 that machine. The token it issues persists in `<workdir>/token.txt`.
 
+- **Discovery.** With `MOCKTV_AIRPLAY_NAME=<name>` set, it announces `<name>._airplay._tcp` over mDNS
+  (port 47941, `manufacturer=Samsung`, `model` from the profile's `airplay.model`, default `UMOCK`)
+  while on, and withdraws it in standby and on exit. It announces the address of the default-route
+  interface; `MOCKTV_IP` overrides it. The hub must be on the same LAN as the mock. The TXT `deviceid`
+  is the MAC with its last byte changed, on purpose: a real TV's isn't its MAC, so a driver that
+  used it would fail here too. Without the variable `zeroconf` isn't imported.
 - **Power.** `KEY_POWER` puts it in standby; a Wake-on-LAN packet for its MAC boots it. Whether it
   still answers REST and sockets in standby depends on the profile.
 - **Pairing.** A wrong or missing token on 8002 shows the "allow" dialog, accepted after 2 s; the
