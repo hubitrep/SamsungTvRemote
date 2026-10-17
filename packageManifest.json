@@ -1,12 +1,12 @@
 {
   "packageName": "Samsung TV Remote (hubitrep)",
   "author": "hubitrep (original by Dave Gutheinz)",
-  "version": "2.4.3",
+  "version": "2.4.4",
   "minimumHEVersion": "2.3.9",
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
   "communityLink": "https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829",
-  "dateReleased": "2026-10-15",
-  "releaseNotes": "Beta. Frame TVs: art mode is read and set over the art channel (it never worked before). Refresh reads the power state. Keys wait for the TV's allow prompt on a new connection. New trace logging preference. New optional app: Samsung TV Remote Tester, which reports how your TV differs from what the driver expects. Full list in the README.",
+  "dateReleased": "2026-10-17",
+  "releaseNotes": "Beta. Setup finds the TV on the network: leave the IP blank and save (2018 and later TVs). The driver follows the TV to a new IP address. New command Find TVs. The Tester gained a Discovery test. Full list in the README.",
   "drivers": [
     {
       "id": "70c694f2-d2cb-4c00-9357-28376f9c794f",
@@ -14,7 +14,7 @@
       "namespace": "davegut",
       "location": "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVRemote.groovy",
       "required": true,
-      "version": "2.4.3"
+      "version": "2.4.4"
     }
   ],
   "apps": [
@@ -26,7 +26,7 @@
       "required": false,
       "oauth": false,
       "primary": false,
-      "version": "0.2.0"
+      "version": "0.3.0"
     }
   ]
 }

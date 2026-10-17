@@ -53,14 +53,14 @@ it to an installed package with **Modify**.
 
 ## Changes
 
-### Unreleased
+### 2.4.4 (beta)
 
 - With the IP left blank, Save finds the TV over mDNS (AirPlay) and confirms it with a request to
   the TV's REST API. With several TVs, pick one under **TV** and save.
 - When a TV that was on stops answering, the driver looks for it again and follows it to its new
   IP, matching it by MAC. It searches at most once every 5 minutes.
 - New command **Find TVs** searches again and logs the TVs found.
-- The tester gained a Discovery test.
+- The tester gained a Discovery test (tester 0.3.0).
 
 ### 2.4.3 (beta)
 
