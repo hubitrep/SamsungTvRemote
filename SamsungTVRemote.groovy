@@ -1880,12 +1880,17 @@ def statusParse(mainData) {
 		String pictureCap = mainData["custom.picturemode"] ? "custom.picturemode" : "samsungvd.pictureMode"
 		state.pictureModeCap = pictureCap
 		String pictureMode = mainData[pictureCap]?.pictureMode?.value
+		//	with the TV off, SmartThings may list fewer modes than the TV has; refresh the lists while on
+		def pictureModes = mainData[pictureCap]?.supportedPictureModes?.value
+		if (pictureModes) { state.pictureModes = pictureModes }
 		sendEvent(name: "pictureMode",value: pictureMode)
 		parseResults << [pictureMode: pictureMode]
 
 		String soundCap = mainData["custom.soundmode"] ? "custom.soundmode" : "samsungvd.soundMode"
 		state.soundModeCap = soundCap
 		String soundMode = mainData[soundCap]?.soundMode?.value
+		def soundModes = mainData[soundCap]?.supportedSoundModes?.value
+		if (soundModes) { state.soundModes = soundModes }
 		sendEvent(name: "soundMode",value: soundMode)
 		parseResults << [soundMode: soundMode]
 	}
@@ -2066,7 +2071,7 @@ def setTvChannel(newChannel) {
 
 // ===== Logging =====
 
-def version() { return "2.4.5" }
+def version() { return "2.4.6" }
 
 def label() { return device.displayName + "-${version()}" }
 

@@ -53,6 +53,11 @@ it to an installed package with **Modify**.
 
 ## Changes
 
+### 2.4.6 (beta)
+
+- SmartThings: the picture and sound mode lists used by the toggle commands refresh while the TV
+  is on. Before, they were read only on Save, and a TV that was off could list fewer modes.
+
 ### 2.4.5 (beta)
 
 - SmartThings: picture and sound mode work on TVs that report them as `samsungvd.pictureMode` and
