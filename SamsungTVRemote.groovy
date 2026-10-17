@@ -17,6 +17,7 @@ def driverVer() { return version() }
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.transform.Field
+import hubitat.helper.NetworkUtils
 import java.util.concurrent.ConcurrentHashMap
 
 metadata {
@@ -31,12 +32,16 @@ metadata {
 		capability "Initialize"
 		capability "SamsungTV"
 		command "showMessage", [[name: "Not Implemented"]]
+		command "findTvs"		//	search the network for Samsung TVs
 		capability "Switch"
 		capability "PushableButton"
 		capability "Variable"
 	}
 	preferences {
-		input ("deviceIp", "text", title: "Samsung TV Ip", defaultValue: "")
+		input ("deviceIp", "text", title: "TV IP address (leave blank to find the TV on the network)", defaultValue: "")
+		if ((state?.foundTvs as Map)?.size() > 1) {
+			input ("tvChoice", "enum", title: "TV", options: state.foundTvs)
+		}
 		if (deviceIp) {
 			List modeOptions = ["ART_MODE", "Ambient", "none"]
 			if (getDataValue("frameTv") == "false") {
@@ -87,10 +92,20 @@ def updated() {
 	close()
 	["wsQueue", "currentFunction", "pendingPowerHold", "powerProbeAt",
 	 "wsData", "standbyTest", "configured", "onPollCount"].each { state.remove(it) }
+	String pick = settings?.tvChoice
+	if (pick && state.foundTvIps?.get(pick)) {
+		String pickIp = state.foundTvIps[pick]
+		device.removeSetting("tvChoice")
+		state.remove("foundTvs")
+		state.remove("foundTvIps")
+		applyTv(pickIp, pick)
+		return
+	}
 	sendEvent(name: "presetUpdateNext", value: "false")
 	def updStatus = [:]
 	if (!deviceIp) {
-		logWarn("\n\n\t\t<b>Enter the deviceIp and Save Preferences</b>\n\n")
+		logInfo("Searching the network for the TV")
+		runIn(1, "runSetupSearch")
 		updStatus << [status: "ERROR", data: "Device IP not set."]
 	} else {
 		if (!getDataValue("driverVersion") || getDataValue("driverVersion") != driverVer()) {
@@ -245,6 +260,94 @@ String mdnsTraceLine(Map r) {
 	return "mdns: name=${r?.name} ip=${ipv4List(r?.ip4Addresses)[0] ?: '-'} manufacturer=${txt.manufacturer ?: '-'} " +
 		"model=${txt.model ?: '-'} keys=${txt.keySet().collect { it as String }.sort().join(',')}".toString()
 }
+
+//	hub-bound search: mDNS, then a REST check of each candidate
+@Field static final String MDNS_SERVICE = "_airplay._tcp"
+@Field static final int SEARCH_TIMEOUT_MS = 6000
+@Field static ConcurrentHashMap<String, Map> searchMem = new ConcurrentHashMap<String, Map>()
+
+//	candidate TVs from an mDNS query; [] when the call is missing (older firmware) or fails
+List<Map> searchTvs() {
+	state.lastSearch = now()
+	List results = []
+	try {
+		results = NetworkUtils.getMDNSServiceResults(MDNS_SERVICE, SEARCH_TIMEOUT_MS) as List
+	} catch (Throwable t) {
+		logDebug([method: "searchTvs", error: "mDNS search failed: ${t}".toString()])
+		return []
+	}
+	results?.each { Map r ->
+		if ((r?.textRecords?.manufacturer ?: "").toString().toLowerCase().startsWith("samsung")) {
+			logTrace(mdnsTraceLine(r))
+		}
+	}
+	return airplayCandidates(results)
+}
+
+//	ask each candidate for its MAC; finishSearch collects the answers 7 s later
+void confirmTvs(List<Map> cands, String purpose) {
+	searchMem[device.id as String] = [purpose: purpose, found: []]
+	cands?.each { Map c ->
+		asynchttpGet("confirmTvParse", [uri: "http://${c.ip}:8001/api/v2/", timeout: 5], [ip: c.ip])
+	}
+	runIn(7, "finishSearch")
+}
+
+void confirmTvParse(resp, Map data) {
+	if (resp?.status != 200) { return }
+	try {
+		Map d = new JsonSlurper().parseText(resp.data)?.device
+		String mac = d?.wifiMac
+		if (normMac(mac) == null) { return }
+		Map m = searchMem[device.id as String]
+		if (m == null) { return }
+		m.found << [ip: data.ip, mac: mac, label: tvLabel(d.name as String, data.ip as String)]
+	} catch (e) {
+		logDebug([method: "confirmTvParse", ip: data?.ip, error: "unparsable reply"])
+	}
+}
+
+void finishSearch() {
+	Map m = searchMem.remove(device.id as String)
+	if (m == null) { return }
+	List<Map> found = m.found
+	if (m.purpose == "setup") {
+		if (found.isEmpty()) {
+			logWarn("No Samsung TV answered. The TV must be on, on the same network as the hub, " +
+				"with AirPlay on. 2016-2017 TVs need the IP typed.")
+		} else if (found.size() == 1) {
+			Map tv = found[0]
+			String msg = "Found ${tv.label}".toString()
+			if (!deviceIp) {
+				logInfo(msg)
+				applyTv(tv.ip as String, tv.mac as String)
+			} else if (!sameTv(getDataValue("deviceMac"), tv.mac as String)) {
+				logInfo("${msg}; to use it, clear the IP and save")
+			} else {
+				logInfo(msg)
+			}
+		} else {
+			state.foundTvs = found.collectEntries { [(it.mac): it.label] }
+			state.foundTvIps = found.collectEntries { [(it.mac): it.ip] }
+			logInfo("Found ${found.size()} TVs: choose one under TV and save")
+		}
+	}
+	//	Task 3: else if (m.purpose == "repair") { ... }
+}
+
+//	use this TV; a different TV than the one configured starts over on pairing
+void applyTv(String ip, String mac) {
+	if (isTvChange(getDataValue("deviceMac"), mac)) {
+		state.token = "12345678"
+		logWarn("This is a different TV from the one set up; it will ask to allow the remote.")
+	}
+	device.updateSetting("deviceIp", [type: "text", value: ip])
+	runIn(1, "updated")
+}
+
+def findTvs() { runIn(1, "runSetupSearch") }
+
+void runSetupSearch() { confirmTvs(searchTvs(), "setup") }
 
 //	===== Polling/Refresh Capability =====
 def onPoll() {
