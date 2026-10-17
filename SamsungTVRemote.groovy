@@ -400,7 +400,7 @@ def onPoll() {
 		uri: "http://${deviceIp}:8001/api/v2/",
 		timeout: 6
 	]
-	asynchttpGet("onPollParse", sendCmdParams, [sentAt: now()])
+	asynchttpGet("onPollParse", sendCmdParams, [sentAt: now(), ip: deviceIp])
 	//	after a reboot the attribute still says open; the in-memory socket state does not
 	if (ws().phase == "closed" && device.currentValue("wsStatus") == "open") {
 		sendEvent(name: "wsStatus", value: "closed")
@@ -423,6 +423,11 @@ def updateDriver() {
 }
 
 def onPollParse(resp, data) {
+	//	a reply from the address in use before a repair or a new IP says nothing about the TV
+	if (data?.ip && data.ip != deviceIp) {
+		logTrace("rest: reply from the old address ignored")
+		return
+	}
 	if (traceLog) {
 		String keys = ""
 		String ps = "-"
