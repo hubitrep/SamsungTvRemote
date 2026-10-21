@@ -6,7 +6,7 @@
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
   "communityLink": "https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829",
   "dateReleased": "2026-10-17",
-  "releaseNotes": "Beta. SmartThings: the playing app shows right after the upgrade, and the driver finds the TV on the account. Tidier logging. Full list in the README.",
+  "releaseNotes": "2.4.8 (beta): SmartThings: the playing app shows right after an upgrade; with Device ID blank, the driver finds the TV on the SmartThings account.",
   "drivers": [
     {
       "id": "70c694f2-d2cb-4c00-9357-28376f9c794f",
