@@ -9,7 +9,8 @@
 # what it leaves out. Control: GET http://<mock>:8001/mock/state, /mock/power?to=on|standby,
 # /mock/profile?name=<file in mock-profiles, without .json>, /mock/unpair.
 # With MOCKTV_AIRPLAY_NAME set it announces <name>._airplay._tcp over mDNS while on (needs zeroconf).
-import asyncio, json, os, random, socket, ssl, sys, time, uuid
+# While on it answers SSDP searches for DIAL, and for the remote control receiver if the profile says so.
+import asyncio, json, os, random, socket, ssl, struct, sys, time, uuid
 from aiohttp import web, WSMsgType
 
 CERT, KEY, WORK = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -324,6 +325,45 @@ class Wol(asyncio.DatagramProtocol):
             log("wol: magic packet from", addr[0])
             asyncio.ensure_future(boot())
 
+SSDP_RCR = "urn:samsung.com:device:RemoteControlReceiver:1"
+SSDP_DIAL = "urn:dial-multiscreen-org:service:dial:1"
+
+class Ssdp(asyncio.DatagramProtocol):
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
+        if tv["power"] != "on" or not data.startswith(b"M-SEARCH"):
+            return
+        text = data.decode("latin-1")
+        # the TU7000 answers DIAL but not the receiver type
+        st = next((t for t in ([SSDP_RCR] if P.get("ssdpRemoteReceiver") else []) + [SSDP_DIAL] if t in text), None)
+        if not st:
+            return
+        log("ssdp: search from", addr[0], "answered", st)
+        self.transport.sendto(("HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nEXT:\r\n"
+                               f"LOCATION: http://{lan_ip()}:8001/mock/rcr.xml\r\n"
+                               "SERVER: SHP, UPnP/1.0, Samsung UPnP SDK/1.0\r\n"
+                               f"ST: {st}\r\nUSN: uuid:{UUID}::{st}\r\n\r\n").encode(), addr)
+
+async def ssdp_description(request):
+    log("ssdp: description fetched by", request.remote)
+    d = P["deviceInfo"]
+    return web.Response(content_type="text/xml", text=(
+        '<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0"><specVersion><major>1</major>'
+        f"<minor>0</minor></specVersion><device><deviceType>{SSDP_RCR if P.get("ssdpRemoteReceiver") else SSDP_DIAL}</deviceType>"
+        f"<friendlyName>[TV] Mock</friendlyName><manufacturer>Samsung Electronics</manufacturer>"
+        f"<modelName>{d.get('modelName')}</modelName><UDN>uuid:{UUID}</UDN></device></root>"))
+
+async def start_ssdp(loop):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    s.bind(("", 1900))
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                 struct.pack("4s4s", socket.inet_aton("239.255.255.250"), socket.inet_aton(lan_ip())))
+    await loop.create_datagram_endpoint(Ssdp, sock=s)
+
 def lan_ip():
     # the address of the interface on the default route; connect() on UDP sends nothing
     if os.environ.get("MOCKTV_IP"):
@@ -375,6 +415,7 @@ async def main():
     app.router.add_get("/mock/power", mock_power)
     app.router.add_get("/mock/profile", mock_profile)
     app.router.add_get("/mock/unpair", mock_unpair)
+    app.router.add_get("/mock/rcr.xml", ssdp_description)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     sslctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -382,9 +423,13 @@ async def main():
     await web.TCPSite(runner, "0.0.0.0", 8001).start()
     await web.TCPSite(runner, "0.0.0.0", 8002, ssl_context=sslctx).start()
     loop = asyncio.get_running_loop()
+    await start_ssdp(loop)
     for port in (9, 7):
-        await loop.create_datagram_endpoint(Wol, local_addr=("0.0.0.0", port), allow_broadcast=True)
-    log(f"mock TV up: REST/ws 8001, wss 8002, WoL 9/7, MAC {MAC}")
+        try:
+            await loop.create_datagram_endpoint(Wol, local_addr=("0.0.0.0", port), allow_broadcast=True)
+        except PermissionError:
+            log(f"WoL port {port} not bound: privileged on this host")
+    log(f"mock TV up: REST/ws 8001, wss 8002, SSDP 1900, WoL 9/7, MAC {MAC}")
     try:
         if tv["power"] == "on":
             await announce()

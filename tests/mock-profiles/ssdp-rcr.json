@@ -1,0 +1,4 @@
+{
+  "source": "default TV, plus an SSDP answer for the remote control receiver type; the TU7000 sends none",
+  "ssdpRemoteReceiver": true
+}

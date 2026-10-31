@@ -55,6 +55,9 @@ that machine. The token it issues persists in `<workdir>/token.txt`.
   interface; `MOCKTV_IP` overrides it. The hub must be on the same LAN as the mock. The TXT `deviceid`
   is the MAC with its last byte changed, on purpose: a real TV's isn't its MAC, so a driver that
   used it would fail here too. Without the variable `zeroconf` isn't imported.
+  While on, it also answers SSDP searches for DIAL, and with `"ssdpRemoteReceiver": true` in the
+  profile (`ssdp-rcr.json`) for `urn:samsung.com:device:RemoteControlReceiver:1`, which the TU7000
+  doesn't answer. The description is at `/mock/rcr.xml` on 8001.
 - **Power.** `KEY_POWER` puts it in standby; a Wake-on-LAN packet for its MAC boots it. Whether it
   still answers REST and sockets in standby depends on the profile.
 - **Pairing.** A wrong or missing token on 8002 shows the "allow" dialog, accepted after 2 s; the
