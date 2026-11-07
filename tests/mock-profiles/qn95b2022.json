@@ -1,0 +1,21 @@
+{
+  "_source": "2022 QN95B (QN75QN95BAFXZA, wired): tester report 0.3.1 with driver 2.4.8, https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829/14 (2026-11-07). The report's otherMessages=ms.error was the TV's 'No Authorized' reply to a key sent before ms.channel.connect, which the mock now gives any key sent during connectMs. onMs null: three Wake-on-LAN sends did not wake it while REST answered PowerState standby; the owner says the SmartThings app turns it on. probeReply was not measured (the TV reports PowerState).",
+  "deviceInfo": {
+    "Language": "en_US",
+    "VoiceSupport": "true",
+    "WallScreenRatio": "-1",
+    "model": "22_PONTUSM_QTV",
+    "modelName": "QN75QN95BAFXZA",
+    "networkType": "wired"
+  },
+  "isSupport": {
+    "remote_voiceControl": "true"
+  },
+  "connectMs": 6618,
+  "wentAway": "PowerState standby",
+  "restAfterOffS": 22,
+  "onMs": null,
+  "airplay": {
+    "model": "QBQ95"
+  }
+}

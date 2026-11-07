@@ -79,7 +79,7 @@ back the same report, timings aside.
 |---|---|
 | `deviceInfo`, `isSupport`, `apiVersion` | test 1: the `/api/v2/` reply (model fields only). `FrameTVSupport`, `TokenAuthSupport` and the presence of `PowerState` decide how the mock behaves |
 | `handshake` | test 2: `ms.channel.connect`, or `ms.channel.unauthorized` when the allow dialog is refused |
-| `connectMs` | test 2: delay before `ms.channel.connect` |
+| `connectMs` | test 2: delay before `ms.channel.connect`; a message sent before it gets `ms.error` "No Authorized" |
 | `otherMessages` | events the TV sends that the driver doesn't handle; the mock sends them after a connect (`art:<name>` on the art channel) |
 | `wentAway` | test 4: `REST stopped`, or anything else for a TV that keeps answering REST in standby |
 | `restAfterOffS` | test 4: seconds REST keeps answering after the power-off |
@@ -87,6 +87,7 @@ back the same report, timings aside.
 | `artReady`, `statusReply`, `setReply`, `powerStateInArt` | test 7: art channel sends `ms.channel.ready`; art state at start; `set_artmode_status` reply before or after the broadcast (`not seen`: after); `PowerState` while showing art |
 | `launchMs`, `closeBody` | test 8: time to answer an app launch; body of the close reply |
 | `answered`, `apps` | test 9: whether `ed.installedApp.get` is answered, and with how many apps |
+| `onMs` | power-on test: `null` makes the mock ignore Wake-on-LAN (absent: it wakes after `bootS`) |
 | `bootS` | mock only: seconds from Wake-on-LAN to on (test 5's `firstAnswerMs` is an upper bound) |
 | `artTokenStalls` | mock only: a token on the art channel stalls the handshake into `ms.channel.timeOut` |
 
@@ -96,6 +97,7 @@ back the same report, timings aside.
 | `frame2024.json` | 2024 Frame: late set reply, `PowerState` on in art, token stalls the art channel | ha-samsungtv-smart notes; platform string made up |
 | `frame2025.json` | 2025 Frame: `PowerState` standby while showing art | ha-samsungtv-smart release notes; platform string made up |
 | `qn88b2022.json` | 2022 QN88B: reports `PowerState` standby while REST still answers after off | tester report |
+| `qn95b2022.json` | 2022 QN95B: 6.6 s handshake, REST answers `PowerState` standby, Wake-on-LAN doesn't wake it | tester report |
 | `nopowerstate.json` | no `PowerState`, REST answers in standby | constructed |
 | `notoken.json` | no token auth, plain `ws` on 8001 | constructed |
 | `refused.json` | the allow dialog refused | constructed |

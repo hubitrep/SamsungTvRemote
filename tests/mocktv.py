@@ -209,7 +209,17 @@ async def handshake(ws, name, secure, params):
             tv["token"] = str(random.randint(10000000, 99999999))
             open(TOKEN_FILE, "w").write(tv["token"])
         data["token"] = tv["token"]
-    await asyncio.sleep((P.get("connectMs") or 0) / 1000)
+    # a message sent before ms.channel.connect is refused (QN95B report)
+    deadline = time.monotonic() + (P.get("connectMs") or 0) / 1000
+    while (left := deadline - time.monotonic()) > 0:
+        try:
+            msg = await ws.receive(timeout=left)
+        except asyncio.TimeoutError:
+            break
+        if msg.type != WSMsgType.TEXT:
+            return False
+        log(f"rx {name} before connect:", msg.data[:300])
+        await send(ws, name, {"data": {"message": "No Authorized"}, "event": "ms.error"})
     await send(ws, name, {"data": data, "event": "ms.channel.connect"})
     for ev in extra_events(False):
         await send(ws, name, {"data": {}, "event": ev})
@@ -323,6 +333,10 @@ class Wol(asyncio.DatagramProtocol):
         mac = bytes.fromhex(MAC.replace(":", ""))
         if data[:6] == b"\xff" * 6 and data[6:6 + 16 * 6] == mac * 16:
             log("wol: magic packet from", addr[0])
+            # onMs null (power-on test): the TV did not wake on Wake-on-LAN (QN95B report)
+            if "onMs" in P and P["onMs"] is None:
+                log("wol: ignored (profile onMs null)")
+                return
             asyncio.ensure_future(boot())
 
 SSDP_RCR = "urn:samsung.com:device:RemoteControlReceiver:1"
