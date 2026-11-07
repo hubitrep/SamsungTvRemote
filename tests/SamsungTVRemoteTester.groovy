@@ -26,7 +26,7 @@ import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.text.SimpleDateFormat
 
-@Field static final String CODE_VERSION = "0.3.1"
+@Field static final String CODE_VERSION = "0.3.2"
 
 @Field static final String BUSY = "a run is in progress"
 
@@ -817,8 +817,10 @@ Map evalRemoteSocket(List<Map> lines, List<Map> events, TimeZone tz) {
     return f
 }
 
+// Keys the TV took: one it refused before accepting the connection ("No Authorized") is sent again.
 Map evalBurst(List<Map> lines) {
-    return [opens: countLines(lines, '^ws remote: status: open'), keysSent: countLines(lines, '^tx remote: .*KEY_HOME')]
+    int refused = countLines(lines, '^rx remote: .*"No Authorized"')
+    return [opens: countLines(lines, '^ws remote: status: open'), keysSent: countLines(lines, '^tx remote: .*KEY_HOME') - refused]
 }
 
 // How the TV went away after off: REST stopped answering, it reported standby, or its socket timed out.
@@ -951,6 +953,8 @@ String otherMessages(List<Map> lines, List known, List knownArt) {
         String outer = null
         while (m.find()) outer = m.group(1)            // the outer event comes last in the TV's JSON
         if (outer == null) continue
+        // the driver resends what the TV refused before it accepted the connection
+        if (outer == "ms.error" && msg.contains('"No Authorized"')) continue
         if (!(outer in known)) out << outer
         if (outer == "d2d_service_message") {
             def a = msg =~ /\\"event\\": ?\\"(\w+)\\"/

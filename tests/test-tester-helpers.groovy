@@ -142,6 +142,9 @@ check 'refused: key not judged', r3.handshake == 'ms.channel.unauthorized' && !r
 println 'evalBurst'
 List<Map> kb = [line('1:00:00.000', 'ws remote: status: open')] + (1..3).collect { line('1:00:01.000', 'tx remote: {"DataOfCmd":"KEY_HOME"}') }
 check 'one open, three keys', h.evalBurst(kb) == [opens: 1, keysSent: 3]
+List<Map> kr = kb + (1..3).collect { line('1:00:02.000', 'rx remote: {"data":{"message":"No Authorized"},"event":"ms.error"}') } +
+               (1..3).collect { line('1:00:07.000', 'tx remote: {"DataOfCmd":"KEY_HOME"}') }
+check 'refused before the connect, sent again: three keys', h.evalBurst(kr) == [opens: 1, keysSent: 3]
 
 println 'evalPowerOff'
 long t0 = h.tsMs('2026-10-15 20:31:20.000', utc)
@@ -241,6 +244,7 @@ List<Map> om = [line('1:00:00.000', 'rx remote: {"data": {"clients": []}, "event
                 line('1:00:05.000', 'rx remote: {"data": {"message": "y"}, "event": "ms.error"}')]
 check 'unknown outer and art events, once each', h.otherMessages(om, known, kart) == 'ms.error,ed.edenTV.update,art:image_selected'
 check 'none', h.otherMessages(om.take(1), known, kart) == ''
+check 'No Authorized is handled', h.otherMessages([line('1:00:00.000', 'rx remote: {"data":{"message":"No Authorized"},"event":"ms.error"}')], known, kart) == ''
 
 println 'sampleLines'
 check 'handshake kept and masked', h.sampleLines(2, rs) == ['20:57:57.708 rx remote: {"data": {"clients": [], "token":"<token>"}, "event": "ms.channel.connect"}']

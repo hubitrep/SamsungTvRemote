@@ -1,12 +1,12 @@
 {
   "packageName": "Samsung TV Remote (hubitrep)",
   "author": "hubitrep (original by Dave Gutheinz)",
-  "version": "2.4.8",
+  "version": "2.4.9",
   "minimumHEVersion": "2.3.9",
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
   "communityLink": "https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829",
-  "dateReleased": "2026-10-17",
-  "releaseNotes": "2.4.8 (beta): SmartThings: the playing app shows right after an upgrade; with Device ID blank, the driver finds the TV on the SmartThings account.",
+  "dateReleased": "2026-11-07",
+  "releaseNotes": "2.4.9 (beta): keys are no longer lost on TVs slow to accept the connection; spaces around the IP address are removed on Save.",
   "drivers": [
     {
       "id": "70c694f2-d2cb-4c00-9357-28376f9c794f",
@@ -14,7 +14,7 @@
       "namespace": "davegut",
       "location": "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVRemote.groovy",
       "required": true,
-      "version": "2.4.8"
+      "version": "2.4.9"
     }
   ],
   "apps": [
@@ -26,7 +26,7 @@
       "required": false,
       "oauth": false,
       "primary": false,
-      "version": "0.3.1"
+      "version": "0.3.2"
     }
   ]
 }

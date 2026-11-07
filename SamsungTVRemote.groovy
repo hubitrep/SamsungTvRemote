@@ -88,6 +88,14 @@ def initialize() {
 }
 
 def updated() {
+	//	an address pasted from a log can carry spaces
+	if (deviceIp instanceof String && deviceIp != deviceIp.trim()) {
+		device.updateSetting("deviceIp", [type: "text", value: deviceIp.trim()])
+		logInfo("updated: [deviceIp: spaces removed]")
+		//	this run still sees the old value: start over with the new one
+		runIn(1, "updated")
+		return
+	}
 	unschedule()
 	searchMem.remove(device.id as String)
 	close()
@@ -985,7 +993,7 @@ Map ws() {
 	Map m = wsMem[key]
 	if (m == null) {
 		m = [phase: "closed", funct: null, queue: [], queuedAt: null, connectingAt: null,
-			 holdAt: null, probeAt: null, closeAfterSend: false]
+			 holdAt: null, probeAt: null, closeAfterSend: false, assumed: false, unconfirmed: [], refused: false]
 		wsMem[key] = m
 	}
 	return m
@@ -1022,8 +1030,38 @@ def armIdleClose() {
 }
 
 def execMessage(data) {
-	logTrace("tx ${ws().funct}: ${data}")
+	Map s = ws()
+	logTrace("tx ${s.funct}: ${data}")
+	//	sent before the TV confirmed: kept in case it answers "No Authorized"
+	if (s.assumed) {
+		if (s.unconfirmed == null) { s.unconfirmed = [] }
+		if (s.unconfirmed.size() >= 10) { s.unconfirmed.remove(0) }
+		s.unconfirmed << [data: data, at: now()]
+	}
 	interfaces.webSocket.sendMessage(data)
+}
+
+//	the TV confirmed after the 3 s fallback; resend what it refused meanwhile (a 2022 QN95B takes 6.6 s)
+def lateConfirm() {
+	Map s = ws()
+	List resend = s.refused ? (s.unconfirmed ?: []).findAll { now() - (it.at as Long) < 15000 } : []
+	//	a held press resent as a pair would arrive as a short press (art mode on a Frame): hold again
+	boolean hold = resend.any { it.data.contains('"Cmd":"Press"') }
+	resend = resend.findAll { !it.data.contains('"Cmd":"Press"') && !it.data.contains('"Cmd":"Release"') }
+	boolean closeAfter = s.closeAfterConfirm
+	Map logData = [method: "lateConfirm", refused: s.refused, resent: resend.size(), hold: hold]
+	resetConfirm(s)
+	resend.each { execMessage(it.data) }
+	if (hold) { powerHold() }
+	if (closeAfter) { runIn(2, close) }
+	logDebug(logData)
+}
+
+def resetConfirm(Map s) {
+	s.assumed = false
+	s.refused = false
+	s.unconfirmed = []
+	s.closeAfterConfirm = false
 }
 
 def webSocketOpen() { connect("remote") }
@@ -1055,6 +1093,7 @@ def connect(funct) {
 	s.phase = "connecting"
 	s.funct = funct
 	s.connectingAt = now()
+	resetConfirm(s)
 	interfaces.webSocket.connect(url, ignoreSSLIssues: true)
 }
 
@@ -1068,6 +1107,7 @@ def close() {
 	s.holdAt = null
 	s.closeAfterSend = false
 	s.connectingAt = null
+	resetConfirm(s)
 	interfaces.webSocket.close()
 	sendEvent(name: "wsStatus", value: "closed")
 }
@@ -1097,6 +1137,7 @@ def webSocketStatus(message) {
 			s.queue = []
 			s.holdAt = null
 			s.closeAfterSend = false
+			resetConfirm(s)
 			sendEvent(name: "wsStatus", value: "closed")
 		}
 	} else if (message.startsWith("failure")) {
@@ -1128,6 +1169,7 @@ def wsFailed() {
 	s.holdAt = null
 	s.closeAfterSend = false
 	s.connectingAt = null
+	resetConfirm(s)
 	interfaces.webSocket.close()
 }
 
@@ -1164,7 +1206,13 @@ def wsReady() {
 	}
 	if (s.closeAfterSend) {
 		s.closeAfterSend = false
-		runIn(2, close)
+		if (s.assumed) {
+			//	wait for the confirmation, in case the key has to be resent
+			s.closeAfterConfirm = true
+			runIn(15, close)
+		} else {
+			runIn(2, close)
+		}
 	}
 	logDebug(logData)
 }
@@ -1178,6 +1226,7 @@ def wsReadyTimeout() {
 		probeFailed()
 		close()
 	} else {
+		s.assumed = true
 		wsReady()
 	}
 }
@@ -1199,6 +1248,7 @@ def parse(resp) {
 					state.token = newToken
 					logData << [TOKEN: "updated"]
 				}
+				if (ws().assumed) { lateConfirm() }
 				//	the art channel takes requests only after ms.channel.ready
 				if (ws().funct != "frameArt") { wsReady() }
 				break
@@ -1246,6 +1296,12 @@ def parse(resp) {
 				logWarn(logData)
 				break
 			case "ms.error":
+				//	a message sent before ms.channel.connect
+				if (resp.data instanceof Map && resp.data.message == "No Authorized" && ws().assumed) {
+					ws().refused = true
+					logData << [refused: true]
+				}
+				break
 			case "ms.channel.clientConnect":
 			case "ms.channel.clientDisconnect":
 			case "ms.remote.touchEnable":
@@ -2095,7 +2151,7 @@ def setTvChannel(newChannel) {
 
 // ===== Logging =====
 
-def version() { return "2.4.8" }
+def version() { return "2.4.9" }
 
 def label() { return device.displayName + "-${version()}" }
 

@@ -15,6 +15,9 @@ Support thread: [[BETA] Samsung TV Remote (2016 and later TVs)](https://communit
 - **Manually:** Drivers Code → New Driver → Import, with
   `https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVRemote.groovy`.
 
+On the TV, turn on AirPlay (the driver finds the TV through it; not needed if you type the IP) and,
+under Settings → General → Network → Expert Settings, Power On with Mobile and IP Remote.
+
 Then add a virtual device with the Samsung TV Remote driver, turn the TV on, leave the IP blank and
 click Save. The driver finds the TV on the network; with several TVs, pick one under **TV** and save
 again. Follow Dave's [installation guide](Docs/Installation.pdf) for the rest.
@@ -52,6 +55,14 @@ writes a report to paste in the support thread. See [tests/README.md](tests/READ
 it to an installed package with **Modify**.
 
 ## Changes
+
+### 2.4.9 (beta)
+
+- Keys are no longer lost on TVs that take more than 3 s to accept the connection (seen on a 2022
+  QN95B): the TV refuses them until then, and the driver now sends them again once it accepts.
+- Spaces around the TV IP address are removed on Save.
+- Install notes list the TV settings the driver needs: AirPlay, Power On with Mobile, IP Remote.
+- Tester 0.3.2 counts a key the TV refused and the driver sent again once.
 
 ### 2.4.8 (beta)
 
