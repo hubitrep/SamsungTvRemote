@@ -6,7 +6,7 @@ provide.
 
 Based on [Dave Gutheinz's Samsung TV Remote](https://github.com/DaveGut/HubitatActive/tree/master/SamsungTvRemote),
 with his agreement; the changes below are on top of his 2.3.9b. Thank you, Dave, for the driver.
-Support thread: [[BETA] Samsung TV Remote (2016 and later TVs)](https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829).
+Support thread: [[RELEASE] Samsung TV Remote (2016 and later TVs)](https://community.hubitat.com/t/release-samsung-tv-remote-2016-and-later-tvs/166829).
 
 ## Install
 
@@ -56,7 +56,7 @@ it to an installed package with **Modify**.
 
 ## Changes
 
-### 2.4.9 (beta)
+### 2.4.9
 
 - Keys are no longer lost on TVs that take more than 3 s to accept the connection (seen on a 2022
   QN95B): the TV refuses them until then, and the driver now sends them again once it accepts.
