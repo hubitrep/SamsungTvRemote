@@ -1,5 +1,5 @@
 {
-  "_source": "2022 QN95B (QN75QN95BAFXZA, wired): tester report 0.3.1 with driver 2.4.8, https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829/14 (2026-11-07). The report's otherMessages=ms.error was the TV's 'No Authorized' reply to a key sent before ms.channel.connect, which the mock now gives any key sent during connectMs. onMs null: three Wake-on-LAN sends did not wake it while REST answered PowerState standby; the owner says the SmartThings app turns it on. probeReply was not measured (the TV reports PowerState).",
+  "_source": "2022 QN95B (QN75QN95BAFXZA, wired): tester report 0.3.1 with driver 2.4.8 and the owner's follow-up posts 17 and 18, https://community.hubitat.com/t/beta-samsung-tv-remote-2016-and-later-tvs/166829/14 (2026-11-07). The report's otherMessages=ms.error was the TV's 'No Authorized' reply to a key sent before ms.channel.connect, which the mock now gives any key sent during connectMs. From post 17: wentAway 'REST stopped, PowerState standby' (REST keeps answering in standby), Wake-on-LAN works (the earlier null onMs is gone), REST still reported standby 36 s after the packet; connectMs stays 6618 (post 14; post 17 had 1458). From post 18: wolIgnoredS 6 (a packet within about 6 s of going to standby is ignored). restAfterOffS 6. GUESSES: standbyAnswerS 40 and bootS 45 are chosen to make the slow case visible, not measured. probeReply was not measured (the TV reports PowerState).",
   "deviceInfo": {
     "Language": "en_US",
     "VoiceSupport": "true",
@@ -12,9 +12,11 @@
     "remote_voiceControl": "true"
   },
   "connectMs": 6618,
-  "wentAway": "PowerState standby",
-  "restAfterOffS": 22,
-  "onMs": null,
+  "wentAway": "REST stopped, PowerState standby",
+  "restAfterOffS": 6,
+  "wolIgnoredS": 6,
+  "standbyAnswerS": 40,
+  "bootS": 45,
   "airplay": {
     "model": "QBQ95"
   }

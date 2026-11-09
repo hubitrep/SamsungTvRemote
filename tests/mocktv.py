@@ -7,7 +7,12 @@
 # usage: [MOCKTV_PROFILE=<profile.json>] [MOCKTV_AIRPLAY_NAME=<name>] [MOCKTV_IP=<ipv4>] mocktv.py <cert.pem> <key.pem> <workdir>
 # A profile describes a TV with the tester report's field names; mock-profiles/default.json fills
 # what it leaves out. Control: GET http://<mock>:8001/mock/state, /mock/power?to=on|standby,
-# /mock/profile?name=<file in mock-profiles, without .json>, /mock/unpair.
+# /mock/profile?name=<file in mock-profiles, without .json>, /mock/unpair, /mock/wolmode?ignore=1|0 (ignore every wake), /mock/wol (acts as a received
+# magic packet, same path as the UDP handler: for a rig host that can't bind UDP 9 and 7).
+# /mock/state has pictureOn (the TV is on and not booting) and lastKey (the last key code a socket sent, with keyAtS, epoch seconds) and keys (the last 40 key codes).
+# Profile fields beyond the report's: bootS (seconds from Wake-on-LAN to on), wolIgnoredS (a packet within
+# that many seconds of going to standby is ignored), standbyAnswerS (after an accepted packet, REST answers
+# PowerState standby for that many seconds, whatever the power state, even for a TV whose REST stops in standby).
 # With MOCKTV_AIRPLAY_NAME set it announces <name>._airplay._tcp over mDNS while on (needs zeroconf).
 # While on it answers SSDP searches for DIAL, and for the remote control receiver if the profile says so.
 import asyncio, json, os, random, socket, ssl, struct, sys, time, uuid
@@ -20,7 +25,7 @@ UUID = "7e7ef6f4-0000-4000-8000-000000000001"
 APPS = {"111299001912": ("YouTube", "2.1.498"), "3201907018807": ("Netflix", "5.2.59020")}
 
 P = {}
-tv = {"power": "on", "art": "off", "app": None, "token": None, "booting": False, "shutdownAt": None, "profile": None}
+tv = {"power": "on", "art": "off", "app": None, "token": None, "booting": False, "shutdownAt": None, "wakeAt": None, "profile": None, "lastKey": None, "keyAtS": None, "keys": []}
 TOKEN_FILE = os.path.join(WORK, "token.txt")
 if os.path.exists(TOKEN_FILE):
     tv["token"] = open(TOKEN_FILE).read().strip() or None
@@ -64,6 +69,8 @@ def device_info(request):
         # while shutting down the TU7000 still reports on; a TV whose wentAway has "PowerState standby" reports standby
         standby_at_off = "PowerState standby" in (P.get("wentAway") or "")
         state = "on" if tv["power"] == "on" or (shutting_down() and not standby_at_off) else "standby"
+        if state == "on" and waking():
+            state = "standby"
         if frame() and tv["art"] == "on" and P.get("powerStateInArt"):
             state = P["powerStateInArt"]
         dev["PowerState"] = state
@@ -79,12 +86,18 @@ async def asleep():
 def shutting_down():
     return tv["shutdownAt"] is not None and time.monotonic() - tv["shutdownAt"] < (P.get("restAfterOffS") or 0)
 
-# test 4 wentAway: "REST stopped" means it stops answering; otherwise it answers in standby
+def waking():
+    # standbyAnswerS: for that long after an accepted Wake-on-LAN packet REST says standby
+    if tv["wakeAt"] is None or not P.get("standbyAnswerS"):
+        return False
+    return tv["booting"] or time.monotonic() - tv["wakeAt"] < P["standbyAnswerS"]
+
+# test 8 wentAway: "REST stopped" means it stops answering; otherwise it answers in standby
 def rest_in_standby():
     return "REST stopped" not in (P.get("wentAway") or "REST stopped")
 
 async def rest_info(request):
-    if tv["power"] != "on" and not (rest_in_standby() or shutting_down()):
+    if tv["power"] != "on" and not (rest_in_standby() or shutting_down() or waking()):
         log("rest: GET /api/v2/ (asleep, no answer)")
         await asleep()
     info = device_info(request)
@@ -129,7 +142,7 @@ async def broadcast_art(inner):
 async def go_standby(reason):
     log("power: standby", f"({reason})")
     await unannounce()
-    tv["power"], tv["app"], tv["shutdownAt"] = "standby", None, time.monotonic()
+    tv["power"], tv["app"], tv["shutdownAt"], tv["wakeAt"] = "standby", None, time.monotonic(), None
     if frame():
         tv["art"] = "off"
     for ws, ch in list(sockets):
@@ -245,6 +258,9 @@ async def handle(ws, name, msg):
 power_press = {"at": None}
 
 async def key(cmd, code):
+    if code:
+        tv["lastKey"], tv["keyAtS"] = code, round(time.time(), 1)
+        tv["keys"] = (tv["keys"] + [code])[-40:]
     if code != "KEY_POWER":
         return
     if not frame():
@@ -297,7 +313,8 @@ async def art(ws, name, raw):
         await send(ws, name, d2d({"event": "error", "request_id": rid, "request_data": raw, "error_code": "-7"}))
 
 async def mock_state(request):
-    return web.json_response({k: v for k, v in tv.items() if k not in ("token", "shutdownAt")}
+    return web.json_response({k: v for k, v in tv.items() if k not in ("token", "shutdownAt", "wakeAt")}
+                             | {"pictureOn": tv["power"] == "on" and not tv["booting"]}
                              | {"paired": tv["token"] is not None, "sockets": sorted(ch for _, ch in sockets),
                                 "model": P["deviceInfo"].get("modelName")})
 
@@ -328,16 +345,38 @@ async def mock_unpair(request):
     log("token: forgotten")
     return await mock_state(request)
 
+def wol_received(source):
+    log("wol: magic packet from", source)
+    tv["wolCount"] = tv.get("wolCount", 0) + 1
+    # /mock/wolmode?ignore=1: a TV that never wakes, whatever the profile (a test switch, not a TV trait)
+    if tv.get("ignoreWol"):
+        log("wol: ignored (/mock/wolmode)")
+        return
+    # onMs null (power-on test): the TV did not wake on Wake-on-LAN (QN95B report)
+    if "onMs" in P and P["onMs"] is None:
+        log("wol: ignored (profile onMs null)")
+        return
+    if tv["power"] != "on" and tv["shutdownAt"] is not None and time.monotonic() - tv["shutdownAt"] < (P.get("wolIgnoredS") or 0):
+        log("wol: ignored (just went to standby, profile wolIgnoredS)")
+        return
+    if tv["power"] != "on" and not tv["booting"]:
+        tv["wakeAt"] = time.monotonic()
+    asyncio.ensure_future(boot())
+
 class Wol(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         mac = bytes.fromhex(MAC.replace(":", ""))
         if data[:6] == b"\xff" * 6 and data[6:6 + 16 * 6] == mac * 16:
-            log("wol: magic packet from", addr[0])
-            # onMs null (power-on test): the TV did not wake on Wake-on-LAN (QN95B report)
-            if "onMs" in P and P["onMs"] is None:
-                log("wol: ignored (profile onMs null)")
-                return
-            asyncio.ensure_future(boot())
+            wol_received(addr[0])
+
+async def mock_wolmode(request):
+    tv["ignoreWol"] = request.query.get("ignore") == "1"
+    log("wol mode:", "ignore" if tv["ignoreWol"] else "wake")
+    return await mock_state(request)
+
+async def mock_wol(request):
+    wol_received(f"{request.remote} (/mock/wol)")
+    return await mock_state(request)
 
 SSDP_RCR = "urn:samsung.com:device:RemoteControlReceiver:1"
 SSDP_DIAL = "urn:dial-multiscreen-org:service:dial:1"
@@ -429,6 +468,8 @@ async def main():
     app.router.add_get("/mock/power", mock_power)
     app.router.add_get("/mock/profile", mock_profile)
     app.router.add_get("/mock/unpair", mock_unpair)
+    app.router.add_get("/mock/wol", mock_wol)
+    app.router.add_get("/mock/wolmode", mock_wolmode)
     app.router.add_get("/mock/rcr.xml", ssdp_description)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
@@ -441,6 +482,7 @@ async def main():
     for port in (9, 7):
         try:
             await loop.create_datagram_endpoint(Wol, local_addr=("0.0.0.0", port), allow_broadcast=True)
+            tv["wolPorts"] = tv.get("wolPorts", []) + [port]
         except PermissionError:
             log(f"WoL port {port} not bound: privileged on this host")
     log(f"mock TV up: REST/ws 8001, wss 8002, SSDP 1900, WoL 9/7, MAC {MAC}")
