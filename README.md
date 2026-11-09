@@ -51,10 +51,25 @@ Each TV device updates itself at its next power poll; its settings are kept.
 ## Tester
 
 The optional **Samsung TV Remote Tester** app runs the driver through a set of tests on your TV and
-writes a report to paste in the support thread. See [tests/README.md](tests/README.md). With HPM, add
+writes a report to paste in the support thread. Its page (**Open tester**) shows each test as it
+runs and asks you what only you can see, such as when the picture came on. See [tests/README.md](tests/README.md). With HPM, add
 it to an installed package with **Modify**.
 
 ## Changes
+
+### 2.4.10 (Tester 0.4.0; driver unchanged)
+
+- The Tester has its own page (**Open tester** on the app page). Each test shows as it runs, with a
+  countdown to the end of the step it waits on.
+- Where only you can tell, it asks, next to the test: choose Allow on the TV, whether the Home screen
+  showed, whether the screen went off, when the picture came on, whether art shows, whether the app
+  opened, whether AirPlay is on. Turn off **I'm at the TV** for a run with no questions.
+- It also asks about two TV settings the TV doesn't report (Power On with Mobile, IP Remote), checks
+  the device's MAC against the TV and the hub, and reads the TV's status every 5 s around power off
+  and on.
+- A remote with every driver command, plus Send key, works outside a run; its log shows what the TV
+  answered to each press.
+- Tests are numbered in the order they run.
 
 ### 2.4.9
 

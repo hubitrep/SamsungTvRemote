@@ -1,12 +1,12 @@
 {
   "packageName": "Samsung TV Remote (hubitrep)",
   "author": "hubitrep (original by Dave Gutheinz)",
-  "version": "2.4.9",
+  "version": "2.4.10",
   "minimumHEVersion": "2.3.9",
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
   "communityLink": "https://community.hubitat.com/t/release-samsung-tv-remote-2016-and-later-tvs/166829",
-  "dateReleased": "2026-11-07",
-  "releaseNotes": "2.4.9: keys are no longer lost on TVs slow to accept the connection; spaces around the IP address are removed on Save.",
+  "dateReleased": "2026-11-09",
+  "releaseNotes": "2.4.10: Tester 0.4.0 has its own page: each test runs with a countdown, asks you what only you can see (with \"I'm at the TV\" off it asks nothing), and has a remote with every driver command and a log of what the TV answered. Tests are numbered in run order. The driver is unchanged (2.4.9).",
   "drivers": [
     {
       "id": "70c694f2-d2cb-4c00-9357-28376f9c794f",
@@ -24,9 +24,9 @@
       "namespace": "hubitrep",
       "location": "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/tests/SamsungTVRemoteTester.groovy",
       "required": false,
-      "oauth": false,
+      "oauth": true,
       "primary": false,
-      "version": "0.3.2"
+      "version": "0.4.0"
     }
   ]
 }
