@@ -5,21 +5,43 @@
 `SamsungTVRemoteTester.groovy` is an app that runs the driver through a fixed set of tests against a
 real TV and writes a report to paste in a forum post: what the TV sent (the driver's trace lines),
 what the driver made of it (the device's events), and where either differs from what the driver
-expects. Install it, select the Samsung TV Remote device, and press Run. The tests press HOME, launch
-an app if the device knows its code, switch a Frame to art mode, and turn the TV off and on.
+expects. Install it, select the Samsung TV Remote device, and click **Open tester**. The tests press
+HOME, launch an app if the device knows its code, switch a Frame to art mode, and turn the TV off and on.
+
+The tester page (`samsung-tv-tester-ui.html`, which the app copies from GitHub into the hub's File
+Manager and serves at its `/ui.html`) shows each test as it runs, with a countdown to the end of the
+step it is waiting on. Where only the person at the TV can tell, it asks, with its own countdown:
+choose Allow on the TV, whether the TV went to its home screen after the first Home key (`homeSeen`),
+whether the screen went off after Off (`screenOff`: off, on, or art on a Frame), whether the picture
+came on (and when), whether art is showing, whether the app opened, whether AirPlay is on. An
+unanswered question is reported as "no answer" and the run moves on. Before the run it asks about two
+TV settings the TV doesn't report (Power On with Mobile, IP Remote), and has a box, "I'm at the TV and
+can answer questions", checked by default. Cleared, no question opens: steps that only wait for an
+answer end at once, the Power on watch still reads the TV to its own limit, the report reads "not
+asked" for each question, and its settings line ends "questions off" (`questions on` otherwise). The
+app takes the same choice as `attended=yes|no` on `/run`. After the run it shows the report with Copy, and the mock profile as a download. Its
+remote pad (power, arrows, OK, Back, Home, Exit, menu, guide, source, channels, volume, media keys, Art on a Frame TV or Ambient on another, and a field for any key name) works outside a run; each button calls the driver command of the same name.
+
+**Pad log.** Under the pad, a "Pad log" panel lists each key pressed outside a run: time, button (and the
+typed key for Send key), and the driver's trace, warn and error lines from the 4 seconds after the press, or
+up to the next press (about 15 lines per press; lines past the sixth sit behind "more"). The first press
+turns the driver's trace logging on, and it goes back to what it was after 10 minutes without a press; a
+run starts from the value the person had before the pad. The panel has Copy and Clear (`/padlog/clear`);
+`/status` carries the last 20 entries as `padLog` (the app keeps 50). The next report adds a "Manual keys"
+section with the presses made since the previous report.
 
 | # | Test | Checks |
 |---|---|---|
-| 1 | Device info | the `/api/v2/` reply: status, time, `PowerState` |
-| 2 | Remote socket | the handshake reply, its time, the key sent after it |
+| 1 | Device info | the `/api/v2/` reply: status, time, `PowerState`; whether the device's MAC matches the TV's and the hub's view of its address |
+| 2 | Remote socket | the handshake reply, its time over three connects, the key sent after it |
 | 3 | Key burst | three keys with the socket closed: one connect, three keys |
-| 4 | Power off | how the TV goes away; the switch goes off and stays off |
-| 5 | Power on | Wake-on-LAN sends, time to the first answer, the switch |
-| 6 | Standby check | TVs without `PowerState`: the probe gets `ms.channel.timeOut` |
+| 4 | Apps | launch and close by REST, and the app events |
+| 5 | App list | whether the TV answers `ed.installedApp.get` |
+| 6 | Discovery | whether the TV announces `_airplay._tcp` and the driver's `findTvs` finds it at its address (2016-2017 TVs are expected not to) |
 | 7 | Art mode | Frame TVs: art channel handshake, status reply, setting it there |
-| 8 | Apps | launch and close by REST, and the app events |
-| 9 | App list | whether the TV answers `ed.installedApp.get` |
-| 10 | Discovery | whether the TV announces `_airplay._tcp` and the driver's `findTvs` finds it at its address (2016-2017 TVs are expected not to) |
+| 8 | Power off | how the TV goes away, from `/api/v2/` read every 5 s; the switch goes off and stays off |
+| 9 | Standby check | a socket opened with the TV in standby: `ms.channel.timeOut` expected on TVs without `PowerState`, recorded on the others |
+| 10 | Power on | Wake-on-LAN sends; the TV's `/api/v2/` read every 5 s for 2 minutes; when the picture came on (asked); the switch |
 
 For the maintainer, every report also carries the TV's model fields from `/api/v2/`, the protocol
 lines of the handshake, art and app-list replies (masked), any event the driver doesn't handle
@@ -28,8 +50,10 @@ lines of the handshake, art and app-list replies (masked), any event the driver 
 
 - `test-tester-helpers.groovy`: unit tests for its pure helpers, no hub needed
   (`groovy tests/test-tester-helpers.groovy`).
-- `test-live-tv.sh [@hub]`: runs it through its endpoints (turn on Script access in the app) and
-  prints `[PASS]`/`[FAIL]`/`[WARN]` per test; exit 0, 1 on a driver difference, 2 if it couldn't run.
+- `test-tester-ui.js`: unit tests for the page's logic, no hub or browser needed
+  (`node tests/test-tester-ui.js`).
+- `test-live-tv.sh [@hub]`: runs it through its endpoints (open the app once first, which turns OAuth
+  on); it answers no questions, so each runs out its time. It prints `[PASS]`/`[FAIL]`/`[WARN]` per test; exit 0, 1 on a driver difference, 2 if it couldn't run.
   It reads hub addresses from `.hubitat.json` in the current directory, or `HUBITAT_CONFIG`.
 
 ## Mock Samsung TV
@@ -64,7 +88,9 @@ that machine. The token it issues persists in `<workdir>/token.txt`.
   reply carries a new token.
 - **Apps.** YouTube and Netflix answer the app status, launch and close calls; other ids get 404.
 - **Control.** `GET /mock/state`, `/mock/power?to=on|standby`, `/mock/profile?name=<profile>` and
-  `/mock/unpair` on port 8001 change it between test cases.
+  `/mock/unpair` on port 8001 change it between test cases. `/mock/wol` acts as a received magic
+  packet (same path as UDP), for a host that can't bind UDP 9 and 7. `/mock/state` has `pictureOn`
+  (on and not booting), `lastKey` and `keys` (the key codes sockets sent).
 
 ### TV profiles
 
@@ -81,14 +107,16 @@ back the same report, timings aside.
 | `handshake` | test 2: `ms.channel.connect`, or `ms.channel.unauthorized` when the allow dialog is refused |
 | `connectMs` | test 2: delay before `ms.channel.connect`; a message sent before it gets `ms.error` "No Authorized" |
 | `otherMessages` | events the TV sends that the driver doesn't handle; the mock sends them after a connect (`art:<name>` on the art channel) |
-| `wentAway` | test 4: `REST stopped`, or anything else for a TV that keeps answering REST in standby |
-| `restAfterOffS` | test 4: seconds REST keeps answering after the power-off |
-| `probeReply` | test 6: what a socket gets in standby when REST still answers (`ms.channel.timeOut`, or no answer) |
+| `wentAway` | test 8: `REST stopped`, or anything else for a TV that keeps answering REST in standby |
+| `restAfterOffS` | test 8: seconds REST keeps answering after the power-off |
+| `probeReply` | test 9: what a socket gets in standby when REST still answers (`ms.channel.timeOut`, or no answer) |
 | `artReady`, `statusReply`, `setReply`, `powerStateInArt` | test 7: art channel sends `ms.channel.ready`; art state at start; `set_artmode_status` reply before or after the broadcast (`not seen`: after); `PowerState` while showing art |
-| `launchMs`, `closeBody` | test 8: time to answer an app launch; body of the close reply |
-| `answered`, `apps` | test 9: whether `ed.installedApp.get` is answered, and with how many apps |
+| `launchMs`, `closeBody` | test 4: time to answer an app launch; body of the close reply |
+| `answered`, `apps` | test 5: whether `ed.installedApp.get` is answered, and with how many apps |
 | `onMs` | power-on test: `null` makes the mock ignore Wake-on-LAN (absent: it wakes after `bootS`) |
-| `bootS` | mock only: seconds from Wake-on-LAN to on (test 5's `firstAnswerMs` is an upper bound) |
+| `bootS` | mock only: seconds from Wake-on-LAN to on (test 10's `firstAnswerMs` is an upper bound) |
+| `wolIgnoredS` | mock only: a Wake-on-LAN packet within this many seconds of going to standby is ignored (absent: never) |
+| `standbyAnswerS` | mock only: for this many seconds after an accepted Wake-on-LAN packet REST answers `PowerState` standby, and answers at all even for a TV whose REST stops in standby; then it reports on (absent: no such window) |
 | `artTokenStalls` | mock only: a token on the art channel stalls the handshake into `ms.channel.timeOut` |
 
 | Profile | TV | Source |
@@ -97,7 +125,7 @@ back the same report, timings aside.
 | `frame2024.json` | 2024 Frame: late set reply, `PowerState` on in art, token stalls the art channel | ha-samsungtv-smart notes; platform string made up |
 | `frame2025.json` | 2025 Frame: `PowerState` standby while showing art | ha-samsungtv-smart release notes; platform string made up |
 | `qn88b2022.json` | 2022 QN88B: reports `PowerState` standby while REST still answers after off | tester report |
-| `qn95b2022.json` | 2022 QN95B: 6.6 s handshake, REST answers `PowerState` standby, Wake-on-LAN doesn't wake it | tester report |
+| `qn95b2022.json` | 2022 QN95B: 6.6 s handshake, REST answers `PowerState` standby for 6 s after off then stops, Wake-on-LAN ignored within 6 s of standby, slow to report on (`standbyAnswerS` and `bootS` are guesses) | tester report and owner posts |
 | `nopowerstate.json` | no `PowerState`, REST answers in standby | constructed |
 | `notoken.json` | no token auth, plain `ws` on 8001 | constructed |
 | `refused.json` | the allow dialog refused | constructed |

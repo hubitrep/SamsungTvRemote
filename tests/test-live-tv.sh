@@ -2,7 +2,7 @@
 # Copyright 2026 hubitrep
 # SPDX-License-Identifier: Apache-2.0
 # TEST-LIVE: needs a reachable hub with the Samsung TV Remote Tester installed, its TV selected,
-# and Script access turned on in the app.
+# and the app opened once (that turns OAuth on). The script answers no questions, so each one runs out its time.
 #
 # Runs the Samsung TV Remote Tester through its endpoints and prints one line per test.
 # A test where the driver differs is [FAIL]; one where the TV differs, or a skipped test, is [WARN].
@@ -11,7 +11,7 @@
 # Usage:
 #   HUBITAT_CONFIG=path/to/.hubitat.json bash tests/test-live-tv.sh [@hub] [<instance-id>]
 #   TV_TESTS=1,2,3 bash tests/test-live-tv.sh            # a subset (the connection check always runs)
-# Upper bound: 10 min (about 4 min with the driver polling every 60 s).
+# Upper bound: 15 min (about 6 min with the driver polling every 60 s).
 #
 # The config is JSON: {"default_hub": "name", "hubs": {"name": {"hub_ip": "...", "username": "...", "password": "..."}}};
 # username and password only for a hub with hub security.
@@ -60,7 +60,7 @@ try:
     if not inst: print("Samsung TV Remote Tester is not installed"); sys.exit(2)
     page = json.dumps(get(f"/installedapp/configure/json/{inst}"))
     m = re.search(r"access_token=([a-f0-9-]+)", page)
-    if not m: print("no access token: turn on Script access in the app"); sys.exit(2)
+    if not m: print("no access token: open the app once so it turns OAuth on"); sys.exit(2)
 except SystemExit:
     raise
 except Exception as e:
@@ -77,12 +77,12 @@ def api(path, timeout=30):
 
 try:
     r = api("/run" + (f"?tests={tests}" if tests else ""))
-    if r.get("_status") == 409: print("a run is already in progress"); sys.exit(2)
-    if r.get("error"): print(f"run not started: {r['error']}"); sys.exit(2)
-    deadline = time.time() + 10 * 60
+    if "in progress" in (r.get("error") or ""): print("a run is already in progress"); sys.exit(2)
+    if not r.get("ok"): print(f"run not started: {r.get('error')}"); sys.exit(2)
+    deadline = time.time() + 15 * 60
     while time.time() < deadline:
         st = api("/status")
-        if st.get("status") != "running": break
+        if (st.get("run") or {}).get("status") != "running": break
         time.sleep(5)
     else:
         api("/abort")   # leave nothing running, so the next invocation can start

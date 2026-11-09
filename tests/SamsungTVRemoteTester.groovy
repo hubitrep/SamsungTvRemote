@@ -12,6 +12,7 @@ definition(
     author: "hubitrep",
     description: "Tests the Samsung TV Remote driver against your TV and writes a report to paste in the forum",
     category: "Utility",
+    oauth: true,
     // Installed when first opened: an instance never saved with Done drops its runIn calls, and a run would hang.
     installOnOpen: true,
     importUrl: "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/tests/SamsungTVRemoteTester.groovy",
@@ -24,20 +25,28 @@ definition(
 import groovy.transform.Field
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
+import java.nio.file.NoSuchFileException
 import java.text.SimpleDateFormat
 
-@Field static final String CODE_VERSION = "0.3.2"
+@Field static final String CODE_VERSION = "0.4.0"
 
 @Field static final String BUSY = "a run is in progress"
 
+// The pad turns trace logging on for the driver; it goes back after this many seconds without a press.
+@Field static final int PAD_TRACE_S = 600
+@Field static final int PAD_LOG_MAX = 50
+
+// The page lives in File Manager; the GitHub copy is fetched when it is missing or for another version.
+@Field static final String UI_FILE = "samsung-tv-tester-ui.html"
+@Field static final String UI_URL = "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/tests/samsung-tv-tester-ui.html"
 @Field static final Map TEST_NAMES = [
-    0: "Connection", 1: "Device info", 2: "Remote socket", 3: "Key burst", 4: "Power off", 5: "Power on",
-    6: "Standby check", 7: "Art mode", 8: "Apps", 9: "App list", 10: "Discovery"
+    0: "Connection", 1: "Device info", 2: "Remote socket", 3: "Key burst", 4: "Apps", 5: "App list",
+    6: "Discovery", 7: "Art mode", 8: "Power off", 9: "Standby check", 10: "Power on"
 ]
 
-// Run order: power last, so the TV ends on, and art mode before it, so the power cycle resets art mode.
-// Discovery needs the TV on, so it runs before the power tests.
-@Field static final List<Integer> ORDER = [1, 2, 3, 8, 9, 10, 7, 4, 6, 5]
+// Run order, and the test numbers follow it: power last, so the TV ends on, and art mode before it, so the
+// power cycle resets art mode. Discovery needs the TV on, so it runs before the power tests.
+@Field static final List<Integer> ORDER = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 // Device info fields that describe the model, not the user; the rest (ids, names, addresses) stay out of the report.
 @Field static final List DEVICE_INFO_KEYS = ["FrameTVSupport", "GamePadSupport", "ImeSyncedSupport", "Language", "OS", "PowerState",
@@ -58,19 +67,21 @@ import java.text.SimpleDateFormat
 // the TV, where a difference describes the model and is often harmless.
 @Field static final Map EXPECT = [
     0: [reachable: [eq: true]],
-    1: [restStatus: [eq: 200], restMs: [max: 6000], powerStateReported: [eq: true]],
+    1: [restStatus: [eq: 200], restMs: [max: 6000], powerStateReported: [eq: true], macMatchesTv: [eq: true], macMatchesHub: [ne: false]],
     2: [handshake: [eq: "ms.channel.connect"], connectMs: [max: 5000], keySent: [eq: true, driver: true, optional: true],
         openEvent: [eq: true, driver: true], otherMessages: [none: true]],
     3: [opens: [eq: 1, driver: true], keysSent: [eq: 3, driver: true], otherMessages: [none: true]],
-    4: [offEvent: [eq: true, driver: true], noFlap: [eq: true, driver: true], offMs: [max: 30000, optional: true]],
-    5: [onEvent: [eq: true, driver: true], onMs: [max: 45000]],
-    6: [probeReply: [eq: "ms.channel.timeOut"], stayedOff: [eq: true, driver: true]],
+    4: [launchStatus: [eq: 200], closeStatus: [eq: 200], closeBody: [eq: "true"],
+        appEvent: [eq: true, driver: true], closeEvent: [eq: true, driver: true]],
+    5: [answered: [eq: true], otherMessages: [none: true]],
+    6: [:],     // by model year, see discoveryExpect
     7: [artReady: [eq: true], statusReply: [ne: null], statusEventMatches: [eq: true, driver: true],
         setVia: [eq: "art channel", driver: true], otherMessages: [none: true]],
-    8: [launchStatus: [eq: 200], closeStatus: [eq: 200], closeBody: [eq: "true"],
-        appEvent: [eq: true, driver: true], closeEvent: [eq: true, driver: true]],
-    9: [answered: [eq: true], otherMessages: [none: true]],
-    10: [:]     // by model year, see discoveryExpect
+    8: [offEvent: [eq: true, driver: true], noFlap: [eq: true, driver: true], offMs: [max: 30000, optional: true]],
+    9: [probeReply: [eq: "ms.channel.timeOut"], stayedOff: [eq: true, driver: true]],
+    // restOnMs is left out of the fields for a TV with no PowerState; that TV already differs in test 1.
+    10: [onEvent: [eq: true, driver: true], restOnMs: [max: 45000, optional: true], powerStateLags: [eq: false],
+         switchLags: [eq: false, driver: true]]
 ]
 
 
@@ -79,18 +90,22 @@ preferences {
 }
 
 mappings {
-    path("/run")    { action: [GET: "apiRun"] }
-    path("/status") { action: [GET: "apiStatus"] }
-    path("/report") { action: [GET: "apiReport"] }
-    path("/abort")  { action: [GET: "apiAbort"] }
+    path("/ui.html") { action: [GET: "apiUi"] }
+    path("/run")     { action: [GET: "apiRun"] }
+    path("/status")  { action: [GET: "apiStatus"] }
+    path("/report")  { action: [GET: "apiReport"] }
+    path("/abort")   { action: [GET: "apiAbort"] }
+    path("/answer")  { action: [GET: "apiAnswer"] }
+    path("/key")     { action: [GET: "apiKey"] }
+    path("/padlog/clear") { action: [GET: "apiPadLogClear"] }
 }
 
 Map mainPage() {
-    if (scriptAccess) checkOAuth() else dropAccessToken()
+    checkOAuth()
     checkStall()
     Map run = state.run as Map
     boolean running = run?.status == "running"
-    // The page reloads itself while a run is in progress, so the table follows it.
+    // The page reloads itself while a run is in progress, so the summary follows it.
     dynamicPage(name: "mainPage", title: "Samsung TV Remote Tester", install: true, uninstall: true,
                 refreshInterval: running ? 5 : 0) {
         // Locked while a run is in progress: the run and its cleanup act on the device it started with.
@@ -103,26 +118,21 @@ Map mainPage() {
         }
         section("Run") {
             paragraph "The tests change what is on the TV: they press HOME, launch YouTube or Netflix if the device knows its app code, " +
-                      "switch a Frame to art mode, and turn the TV off and on. A run takes about 4 minutes with the driver's " +
-                      "default 60 s polling, less with a shorter interval."
-            if (state.startError) paragraph rawHtml: true, message("error", "Cannot start: ${escapeHtml(state.startError as String)}")
-            input "btnRun", "button", title: "Run", disabled: running, width: 2,
-                  inputClass: "p-button bg-hubitat-primary-green text-white"
-            if (running) input "btnAbort", "button", title: "Abort", width: 2, inputClass: "p-button p-button-outlined"
-            if (run?.tests) {
-                paragraph rawHtml: true, summaryHtml(run)
-                paragraph rawHtml: true, statusHtml(run)
+                      "switch a Frame to art mode, and turn the TV off and on. A run takes about 6 minutes with the driver's " +
+                      "default 60 s polling, less with a shorter interval, and asks you a few questions about what the TV shows."
+            if (state.accessToken) {
+                href name: "openTester", title: "Open tester", style: "external", required: false,
+                     url: "${getFullLocalApiServerUrl()}/ui.html?access_token=${state.accessToken}",
+                     description: "Opens the tester page, where you start the run and answer its questions"
+            } else {
+                paragraph rawHtml: true, message("error", "OAuth could not be turned on for this app. Enable it in the app's code editor, then reopen this page.")
             }
+            if (run?.tests) paragraph rawHtml: true, summaryHtml(run)
         }
         if (state.report) {
-            section("Report: copy it into your forum post") {
+            section("Last report") {
                 paragraph "<textarea readonly rows='30' style='width:100%;font-family:monospace'>${escapeHtml(state.report as String)}</textarea>"
             }
-        }
-        section("Script access") {
-            input "scriptAccess", "bool", title: "Let a script run the tests (turns on OAuth for this app and makes an access token)",
-                  defaultValue: false, submitOnChange: true
-            if (scriptAccess && state.accessToken) paragraph "<a href='${getFullLocalApiServerUrl()}/report?access_token=${state.accessToken}' target='_blank'>Report as JSON</a>"
         }
         section("Logging") {
             input name: "txtEnable", type: "bool", title: "Enable info logging", defaultValue: true
@@ -134,11 +144,13 @@ Map mainPage() {
 void installed() { initialize() }
 
 void uninstalled() {
+    padTraceRestore()
     if ((state.run as Map)?.status == "running") finishRun("aborted", "the app was removed")
 }
 
 void updated() {
     if ((state.run as Map)?.status == "running") finishRun("aborted", "settings saved during the run")
+    padTraceRestore()      // unschedule() below drops its timer
     unsubscribe()
     unschedule()
     initialize()
@@ -146,7 +158,7 @@ void updated() {
 
 void initialize() {
     checkVersion(false)
-    if (scriptAccess) checkOAuth() else dropAccessToken()
+    checkOAuth()
     subscribe(location, "systemStart", "onSystemStart")
     if (debugEnable) runIn(1800, "logsOff")
 }
@@ -168,19 +180,6 @@ void onSystemStart(evt) {
     if ((state.run as Map)?.status == "running") finishRun("interrupted", "hub restart")
 }
 
-void appButtonHandler(String btn) {
-    // Re-initialize now rather than in 1 s: the scheduled updated() would abort the run this press starts.
-    if (checkVersion(false)) updated()
-    if (btn == "btnRun") {
-        String err = startRun([tests: null])
-        if (err == BUSY) return              // a second press, or one from a stale page: the run goes on
-        state.startError = err
-        if (err) logWarn "Cannot start: ${err}"
-    } else if (btn == "btnAbort") {
-        finishRun("aborted", "aborted by the user")
-    }
-}
-
 private String escapeHtml(String s) {
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&#39;")
 }
@@ -198,7 +197,7 @@ private String summaryHtml(Map run) {
     switch (run.status) {
         case "running":
             String where = (run.idx as int) == 0 ? "checking the connection" : "test ${run.idx} of ${(run.tests as List).size() - 1}"
-            return message("info", "Running since ${when}: ${where}. This page updates every 5 s.")
+            return message("info", "Running since ${when}: ${where}.")
         case "done":
             if (drv) return message("error", "<b>Run of ${when}: the driver did not do what it should in ${drv} test${drv > 1 ? 's' : ''}.</b> " +
                                     "Please post the report in the forum thread.")
@@ -208,33 +207,6 @@ private String summaryHtml(Map run) {
         default:
             return message("error", "<b>Run of ${when} ${run.status}</b>: ${escapeHtml((run.reason ?: '') as String)}")
     }
-}
-
-@Field static final Map ROW_STYLE = [
-    ok: ["✓", "text-green-600"], tv: ["⚠", "text-orange-500"], driver: ["✗", "text-red-600"], skipped: ["–", "text-color-secondary"],
-    running: ["▶", "text-blue-500"], waiting: ["·", "text-color-secondary"], "not run": ["·", "text-color-secondary"]
-]
-
-private String statusHtml(Map run) {
-    StringBuilder sb = new StringBuilder("<table style='width:100%;border-collapse:collapse'>")
-    for (Map r : testRows(run, TEST_NAMES)) {
-        List st = ROW_STYLE[r.state] as List
-        sb << "<tr style='border-bottom:1px solid var(--surface-border,#ddd)'>"
-        sb << "<td class='${st[1]}' style='width:1.6em;padding:.35rem 0;font-weight:bold;text-align:center'>${st[0]}</td>"
-        sb << "<td style='width:1.8em;padding:.35rem 0' class='text-color-secondary'>${r.test}</td>"
-        sb << "<td style='padding:.35rem .5rem'>${escapeHtml(r.name as String)}</td>"
-        sb << "<td class='${st[1]}' style='padding:.35rem 0'>${escapeHtml(r.detail as String)}</td></tr>"
-    }
-    sb << "</table><div class='text-color-secondary' style='font-size:.85em;margin-top:.4rem'>" +
-          "⚠ TV differs: your TV does something the driver doesn't assume, often harmless. " +
-          "✗ driver differs: the driver didn't act on what the TV sent.</div>"
-    return sb.toString()
-}
-
-private void dropAccessToken() {
-    if (!state.accessToken) return
-    try { revokeAccessToken() } catch (e) { state.remove("accessToken") }     // throws while OAuth is off
-    logCfg "Script access turned off; the access token is revoked"
 }
 
 
@@ -250,14 +222,28 @@ String startRun(Map opts) {
     if (poll == "off") return "set the device's Power Polling Interval to a number of seconds; the tests rely on its polls"
     int pollS = (poll ?: "60") as int
     List<Integer> tests = opts.tests ? (opts.tests as List<Integer>) : ORDER
+    Map setup = [powerOnWithMobile: opts.powerOnWithMobile ?: "unknown", ipRemote: opts.ipRemote ?: "unknown"]
+    for (String k : setup.keySet()) {
+        if (!(setup[k] in ["yes", "no", "unknown"])) return "${k} must be yes, no or unknown".toString()
+    }
+    // Whether anyone is at the TV to answer questions; without them no prompt opens.
+    String attended = opts.attended ?: "yes"
+    if (!(attended in ["yes", "no"])) return "attended must be yes or no"
+    setup.attended = attended
     state.slowestReadMs = 0L
     state.readFailures = 0
     state.report = null
-    state.startError = null
+    state.prompt = null
+    state.lastTimeout = null
+    state.setup = setup
+    // The pad may have turned trace on: the run restores what the person had before the pad, not the pad's own setting.
+    boolean startTrace = runStartTrace(state.padTrace as Map, tv.getSetting("traceLog"))
+    unschedule("padTraceRestore")
+    state.remove("padTrace")
     state.run = [status: "running", reason: null, tests: [0] + tests, idx: 0, step: 0, results: [], events: [], startedAt: now(),
                  runSince: nowTs(),
-                 pollS: pollS,
-                 ctx: [startSwitch: tv.currentValue("switch"), startTrace: tv.getSetting("traceLog") == true,
+                 pollS: pollS, setup: setup, prompts: [:],
+                 ctx: [startSwitch: tv.currentValue("switch"), startTrace: startTrace,
                        startInfo: tv.getSetting("infoLog") != false, frame: tv.getDataValue("frameTv") == "true",
                        powerState: tv.getDataValue("powerStateReported") != "false"]]
     tv.updateSetting("traceLog", [value: "true", type: "bool"])
@@ -289,8 +275,11 @@ void finishRun(String status, String reason) {
     unschedule("runStep")
     unschedule("pollWait")
     unschedule("sleepDone")
+    unschedule("pollPrompt")
+    unschedule("pollWatch")
     Map run = state.run as Map
     if (run?.status != "running") return       // a stale Abort after the run ended changes nothing
+    state.prompt = null
     run.status = status
     run.reason = maskLine(reason as String)     // an error text can carry the TV's IP
     state.run = run
@@ -298,7 +287,7 @@ void finishRun(String status, String reason) {
     try {
         tv.updateSetting("traceLog", [value: ctx.startTrace ? "true" : "false", type: "bool"])
         tv.updateSetting("infoLog", [value: ctx.startInfo ? "true" : "false", type: "bool"])
-        if (ctx.startSwitch == "off" && tv.currentValue("switch") == "on") tv.off()
+        if (ctx.startSwitch == "off" && tv.currentValue("switch") == "on") deviceCommand("off")
     } catch (e) {
         logError "Cleanup failed: ${e.message}"
     }
@@ -344,7 +333,13 @@ String buildReport(Map run) {
                   apiVersion: tv.getDataValue("apiVersion"), frameTv: tv.getDataValue("frameTv"),
                   tokenSupport: tv.getDataValue("tokenSupport"), powerStateReported: tv.getDataValue("powerStateReported"),
                   smartThings: tv.getSetting("connectST") == true, pollS: run.pollS,
-                  slowestReadMs: state.slowestReadMs, status: run.status, warning: warning]
+                  slowestReadMs: state.slowestReadMs, status: run.status, warning: warning,
+                  powerOnWithMobile: (run.setup as Map)?.powerOnWithMobile, ipRemote: (run.setup as Map)?.ipRemote,
+                  attended: (run.setup as Map)?.attended ?: "yes"]
+    // Pad presses made since the previous report was built.
+    long upTo = now()
+    header.manualKeys = padSection(state.padLog as List, (state.padReportedMs ?: 0L) as long, upTo, location.timeZone)
+    state.padReportedMs = upTo
     return formatReport(header, run.results as List<Map>)
 }
 
@@ -353,7 +348,9 @@ String buildReport(Map run) {
 
 private int pollSeconds(Map s) { pollGap((s.timeout ?: 0) as int, state.lastReadMs as Long) }
 
-private String nowTs() { new Date().format("yyyy-MM-dd HH:mm:ss.SSS", location.timeZone) }
+private String tsAt(long ms) { new Date(ms).format("yyyy-MM-dd HH:mm:ss.SSS", location.timeZone) }
+
+private String nowTs() { tsAt(now()) }
 
 void runStep() {
     try {
@@ -365,29 +362,73 @@ void runStep() {
             run.testSince = nowTs()
             run.testStartMs = now()
             run.stepResults = [:]
+            run.events = []      // finishTest reads only this test's events; the 300-event cap is for one test
+            run.cur = null
             // A 2025 Frame showing art reports standby, so its switch can read off before off() is sent.
-            if (test == 4) run.ctx.alreadyOff = tv.currentValue("switch") == "off"
+            if (test == 8) run.ctx.alreadyOff = tv.currentValue("switch") == "off"
             String skip = skipReason(test, run)
             if (skip) {
                 (run.results as List) << [test: test, name: TEST_NAMES[test], skipped: skip]
                 advance(run)
                 return
             }
+            if (test == 2) run.ctx.allow = needsAllow(tv.getDataValue("tokenSupport"), deviceState()?.token)
         }
         List<Map> steps = stepsFor(test, run)
         if ((run.step as int) >= steps.size()) { state.run = run; finishTest(); return }
         Map s = steps[run.step as int]
         run.stepSince = s.sinceRun ? run.runSince : (s.sinceTest ? run.testSince : nowTs())
         run.stepStartMs = now()
+        long durS = ((s.timeout ?: s.sleep ?: 0) as long)
+        run.cur = [test: test, step: s.name, label: s.label ?: s.name, startedAtMs: run.stepStartMs,
+                   deadlineMs: durS ? (run.stepStartMs as long) + durS * 1000L : null]
         state.run = run
         if (s.sleep) { next("sleepDone", s.sleep as int, run); return }
-        sendStep(s, run)
-        if (!s.wait) { recordStep(s, true, null, null); return }
-        next("pollWait", pollSeconds(s), run)
+        if (s.onlyIf == "airplay") {
+            // The question is for a TV that discovery did not find: the person knows whether it announces AirPlay.
+            // The log read is async, like every other one, so the page's calls don't wait behind it.
+            run.nextDueMs = now() + 35000L
+            state.run = run
+            readTvLinesAsync("airplayLines", run.testSince as String, [idx: run.idx, step: run.step])
+            return
+        }
+        startStep(s, test, run)
     } catch (e) {
         logError "Step failed: ${e}"
         finishRun("aborted", "error: ${e.message}")
     }
+}
+
+void airplayLines(resp, Map data) {
+    try {
+        Map run = state.run as Map
+        if (run?.status != "running" || (run.idx as int) != (data.idx as int) || (run.step as int) != (data.step as int)) return
+        int test = run.tests[run.idx] as int
+        String found = evalDiscovery(linesFrom(resp, data) ?: [], tv.getSetting("deviceIp") as String).result
+        if (!(found in ["none", "other"])) {
+            run.step = (run.step as int) + 1
+            next("runStep", 1, run)
+            return
+        }
+        startStep(stepsFor(test, run)[run.step as int], test, run)
+    } catch (e) {
+        logError "Step failed: ${e}"
+        finishRun("aborted", "error: ${e.message}")
+    }
+}
+
+private void startStep(Map s, int test, Map run) {
+    sendStep(s, run)
+    if (s.prompt) openPrompt(s, test, run)
+    if (s.watch) { pollWatch(); return }
+    if (s.prompt && !s.wait) {
+        // Nobody to ask: the step ends at once as unanswered, with no deadline to wait out.
+        if (!isAttended(run)) { recordStep(s, false, null, "no answer"); return }
+        next("pollPrompt", 1, run)
+        return
+    }
+    if (!s.wait) { recordStep(s, true, null, null); return }
+    next("pollWait", pollSeconds(s), run)
 }
 
 private void advance(Map run) {
@@ -400,11 +441,10 @@ private void advance(Map run) {
 String skipReason(int test, Map run) {
     Map ctx = run.ctx as Map
     // Keys and the power-off need the remote socket the TV just refused.
-    if (ctx.refused && test in [3, 4, 5, 6, 9]) return "the TV refused the remote connection (allow it on the TV, then run again)"
+    if (ctx.refused && test in [3, 8, 10, 9, 5]) return "the TV refused the remote connection (allow it on the TV, then run again)"
     switch (test) {
-        case 6: return ctx.powerState ? "the TV reports PowerState, so the driver doesn't probe" : null
         case 7: return ctx.frame ? null : "not a Frame TV"
-        case 8:
+        case 4:
             // Any app the device has a code for exercises the same launch and close calls.
             ctx.app = ["YouTube", "Netflix"].find { appCode(it as String) }
             state.run = run
@@ -413,15 +453,19 @@ String skipReason(int test, Map run) {
     }
 }
 
-// The driver keeps app names and codes in its state; read only that map, over loopback.
-private String appCode(String name) {
+// The driver keeps app names, codes and its token in its state; read only that, over loopback.
+private Map deviceState() {
     Map st = null
     try {
         httpGet([uri: "http://127.0.0.1:8080", path: "/device/fullJson/${tv.id}", timeout: 20]) { resp -> st = resp.data?.deviceState as Map }
     } catch (e) {
-        logWarn "Could not read the device's app codes: ${e.message}"
-        return null
+        logWarn "Could not read the device's state: ${e.message}"
     }
+    return st
+}
+
+private String appCode(String name) {
+    Map st = deviceState()
     def apps = st?.appData
     if (apps instanceof String) apps = new JsonSlurper().parseText(apps as String)
     Map.Entry hit = (apps instanceof Map) ? (apps as Map).find { (it.key as String).toLowerCase().contains(name.toLowerCase()) } : null
@@ -432,19 +476,33 @@ void sendStep(Map s, Map run) {
     if (!s.cmd) return
     List args = (s.args ?: []) as List
     switch (s.cmd) {
-        case "on": tv.on(); break
-        case "off": tv.off(); break
-        case "close": tv.close(); break
-        case "refresh": tv.refresh(); break
-        case "home": tv.home(); break
-        case "burst": 3.times { tv.home() }; break
-        case "configure": tv.configure(); break
-        case "artMode": tv.artMode(); break
-        case "appOpenByName": tv.appOpenByName(args[0] as String); break
-        case "appClose": tv.appClose(); break
-        case "getInstalledApps": tv.getInstalledApps(); break
-        case "findTvs": tv.findTvs(); break
+        case "burst": deviceCommand("home", [], [[method: "home"], [method: "home"]]); break
+        case "appOpenByName": deviceCommand("appOpenByName", [[type: "STRING", value: args[0] as String]]); break
+        case "on": case "off": case "close": case "refresh": case "home": case "configure": case "artMode":
+        case "appClose": case "getInstalledApps": case "findTvs":
+            deviceCommand(s.cmd as String); break
         default: throw new IllegalArgumentException("unknown step command ${s.cmd}")
+    }
+}
+
+// Runs a driver command in a hub request, not in this app's execution. A command waits for the TV
+// (a websocket connect to a sleeping TV took over two minutes, an app launch about 7 s), and this
+// single-threaded app would hold the page's /status and /answer calls all that time. `then` runs
+// after it, in order (the key burst).
+void deviceCommand(String method, List args = [], List then = []) {
+    asynchttpPost("deviceCommandDone", [uri: "http://127.0.0.1:8080", path: "/device/runmethod",
+                  requestContentType: "application/json", contentType: "application/json",
+                  body: [id: tv.idAsLong, method: method, args: args], timeout: 180],
+                  [method: method, then: then])
+}
+
+void deviceCommandDone(resp, Map data) {
+    // A timeout only means the command is still running on the hub.
+    if (resp.hasError()) logDebug "Command ${data.method}: ${resp.getErrorMessage()}"
+    List then = (data.then ?: []) as List
+    if (then) {
+        Map n = then[0] as Map
+        deviceCommand(n.method as String, (n.args ?: []) as List, then.drop(1))
     }
 }
 
@@ -453,8 +511,23 @@ void pollWait() {
         Map run = state.run as Map
         if (run?.status != "running") return
         keepTrace(run)
+        // The log read is async: a sync read of 1-3 s holds this single-threaded app, and the page's
+        // /status and /answer calls queue behind it.
+        run.nextDueMs = now() + 35000L      // the read's own 30 s timeout, so a slow read isn't a stall
+        state.run = run
+        readTvLinesAsync("pollWaitLines", run.stepSince as String, [idx: run.idx, step: run.step])
+    } catch (e) {
+        logError "Wait failed: ${e}"
+        finishRun("aborted", "error: ${e.message}")
+    }
+}
+
+void pollWaitLines(resp, Map data) {
+    try {
+        Map run = state.run as Map
+        if (run?.status != "running" || (run.idx as int) != (data.idx as int) || (run.step as int) != (data.step as int)) return
         Map s = stepsFor(run.tests[run.idx] as int, run)[run.step as int]
-        List<Map> lines = readTvLines(run.stepSince as String)
+        List<Map> lines = linesFrom(resp, data)
         if (lines == null) {
             if (((state.readFailures ?: 0) as int) >= 3) { finishRun("aborted", "could not read the hub logs"); return }
             next("pollWait", pollSeconds(s), run)
@@ -476,38 +549,173 @@ void sleepDone() {
     recordStep(stepsFor(run.tests[run.idx] as int, run)[run.step as int], true, null, null)
 }
 
-void recordStep(Map s, boolean ok, Long ms, String note) {
+void recordStep(Map s, boolean ok, Long ms, String note, Map extra = [:]) {
     Map run = state.run as Map
     if (run?.status != "running") return
-    (run.stepResults as Map)[s.name] = [ok: ok, ms: ms, at: run.stepStartMs, note: note]
+    // A concurrent prompt (screen off) outlives its step; the hold step that follows ends it.
+    if (((s.prompt && !s.concurrent) || s.endsPrompt) && state.prompt) closePrompt(s)
+    run = state.run as Map
+    (run.stepResults as Map)[s.name] = [ok: ok, ms: ms, at: run.stepStartMs, note: note] + extra
     run.step = (run.step as int) + 1
+    if (note == "timed out") setLastTimeout(run, s)
     state.run = run
     next("runStep", Math.max(1, (s.after ?: 1) as int), run)
 }
 
-List<Map> readTvLines(String since) {
-    long t0 = now()
+private void setLastTimeout(Map run, Map s) {
+    state.lastTimeout = [test: run.tests[run.idx] as int, step: s.name, label: s.label ?: s.name, atMs: now()]
+}
+
+// ── Prompts ───────────────────────────────────────────────────────────
+
+private boolean isAttended(Map run) { ((run.setup as Map)?.attended ?: "yes") != "no" }
+
+private void openPrompt(Map s, int test, Map run) {
+    if (!isAttended(run)) {
+        Map prompts = (run.prompts ?: [:]) as Map
+        prompts[s.prompt] = [notAsked: true]
+        run.prompts = prompts
+        state.run = run
+        return
+    }
+    int seq = ((state.promptSeq ?: 0) as int) + 1
+    state.promptSeq = seq
+    int promptS = (s.promptTimeout ?: s.timeout) as int
+    state.prompt = newPrompt(s.prompt as String, "p${seq}".toString(), test, now(), promptS, run.ctx.frame == true)
+    logCmd "Question ${seq} for the person at the TV: ${(state.prompt as Map).text}"
+}
+
+// Ends the open prompt and keeps what the person answered; an unanswered one past its deadline is a timeout the page shows.
+private void closePrompt(Map s) {
+    Map p = state.prompt as Map
+    if (p == null) return
+    Map run = state.run as Map
+    Map prompts = (run.prompts ?: [:]) as Map
+    prompts[p.kind] = [choice: (p.answer as Map)?.choice, atMs: (p.answer as Map)?.atMs, askedAtMs: p.askedAtMs]
+    run.prompts = prompts
+    state.run = run
+    if (promptOutcome(p, now()) == "expired") setLastTimeout(run, s)
+    state.prompt = null
+}
+
+// A prompt-only step ends on the answer or the deadline; the page answers through /answer.
+void pollPrompt() {
+    try {
+        Map run = state.run as Map
+        if (run?.status != "running") return
+        keepTrace(run)
+        Map s = stepsFor(run.tests[run.idx] as int, run)[run.step as int]
+        Map p = state.prompt as Map
+        String outcome = p ? promptOutcome(p, now()) : "expired"
+        if (outcome == "open") { next("pollPrompt", 1, run); return }
+        boolean answered = outcome == "answered"
+        recordStep(s, answered, answered ? (p.answer.atMs as Long) - (p.askedAtMs as Long) : null, answered ? null : "no answer")
+    } catch (e) {
+        logError "Prompt failed: ${e}"
+        finishRun("aborted", "error: ${e.message}")
+    }
+}
+
+// A watch step reads the TV's REST page every 5 s from a callback. A step with a prompt also ends on that
+// prompt: for "on" once the switch is on and the question is over, for every watch at its time limit.
+void pollWatch() {
+    try {
+        Map run = state.run as Map
+        if (run?.status != "running") return
+        keepTrace(run)
+        Map s = stepsFor(run.tests[run.idx] as int, run)[run.step as int]
+        Map w = (run.watch && run.watchStep == s.name ? run.watch : [readings: [], lastAtMs: 0L]) as Map
+        long base = (s.watch == "hold" ? run.testStartMs : run.stepStartMs) as long
+        long t = now()
+        // Async: a sync read of a TV that doesn't answer blocks for its whole timeout, and in this
+        // single-threaded app the page's /status and /answer calls then queue behind every read.
+        if (t - (w.lastAtMs as long) >= 5000L) {
+            w.lastAtMs = t
+            asynchttpGet("watchReading", [uri: "http://${tv.getSetting('deviceIp')}:8001", path: "/api/v2/", timeout: 4],
+                         [ms: t - base, step: s.name])
+        }
+        run.watch = w
+        run.watchStep = s.name
+        state.run = run
+        Map p = state.prompt as Map
+        boolean promptOver = p == null || promptOutcome(p, now()) != "open"
+        if (p != null && promptOver) {
+            closePrompt(s)
+            run = state.run as Map
+        }
+        long elapsed = now() - (run.stepStartMs as long)
+        boolean switchOn = (run.events ?: []).any { it.name == "switch" && it.value == "on" && (it.at as Long) >= (run.stepStartMs as Long) }
+        // The hold also waits for its question, which started with the off step and has its own deadline.
+        if ((elapsed >= (s.timeout as long) * 1000L && (s.watch != "hold" || promptOver)) || (s.watch == "on" && switchOn && promptOver)) {
+            recordStep(s, true, elapsed, null, [readings: w.readings, watchMs: elapsed])
+            return
+        }
+        next("pollWatch", 1, run)
+    } catch (e) {
+        logError "Watch failed: ${e}"
+        finishRun("aborted", "error: ${e.message}")
+    }
+}
+
+// One watch reading, in the shape fetchDeviceInfo returns; a late reply for an earlier step is dropped.
+void watchReading(resp, Map data) {
+    Map run = state.run as Map
+    if (run?.status != "running" || run.watchStep != data.step || run.watch == null) return
+    Map info = [status: "no answer"]
+    try {
+        if (!resp.hasError()) {
+            info.status = resp.status
+            def d = resp.json
+            if (d instanceof Map) { info.device = d.device; info.version = d.version; info.isSupport = d.isSupport }
+        }
+    } catch (e) { info = [status: "no answer"] }
+    Map w = run.watch as Map
+    List readings = (w.readings ?: []) as List
+    readings << [ms: data.ms as long, v: readingValue(info)]
+    w.readings = readings.sort { it.ms as long }
+    run.watch = w
+    state.run = run
+    logDebug "TV reading at ${(data.ms as long) / 1000}s: ${readings[-1].v}"
+}
+
+void readTvLinesAsync(String handler, String since, Map data) {
+    asynchttpGet(handler, [uri: "http://127.0.0.1:8080", path: "/logs/past/json", timeout: 30],
+                 data + [since: since, sentAt: now()])
+}
+
+// The device's lines from an async log read, or null when the read failed.
+List<Map> linesFrom(resp, Map data) {
     List raw = null
     try {
-        httpGet([uri: "http://127.0.0.1:8080", path: "/logs/past/json", timeout: 30]) { resp -> raw = resp.data as List }
-    } catch (e) {
+        if (!resp.hasError()) raw = resp.json as List
+    } catch (e) { raw = null }
+    if (raw == null) {
         state.readFailures = ((state.readFailures ?: 0) as int) + 1
-        logWarn "Log read failed: ${e.message}"
+        logWarn "Log read failed: ${resp.hasError() ? resp.getErrorMessage() : 'unreadable reply'}"
         return null
     }
     state.readFailures = 0
-    long ms = now() - t0
+    long ms = now() - (data.sentAt as long)
     state.lastReadMs = ms
     if (ms > ((state.slowestReadMs ?: 0L) as Long)) state.slowestReadMs = ms
-    return deviceLines(raw, tv.idAsLong, since)
+    return deviceLines(raw, tv.idAsLong, data.since as String)
 }
 
 void finishTest() {
     Map run = state.run as Map
     int test = run.tests[run.idx] as int
-    Map steps = run.stepResults as Map
+    run.nextDueMs = now() + 35000L
+    state.run = run
     // Device info reuses the poll the connection check already saw.
-    List<Map> lines = readTvLines((test == 1 ? run.runSince : run.testSince) as String) ?: []
+    readTvLinesAsync("finishTestLines", (test == 1 ? run.runSince : run.testSince) as String, [idx: run.idx])
+}
+
+void finishTestLines(resp, Map data) {
+    Map run = state.run as Map
+    if (run?.status != "running" || (run.idx as int) != (data.idx as int)) return
+    int test = run.tests[run.idx] as int
+    Map steps = run.stepResults as Map
+    List<Map> lines = linesFrom(resp, data) ?: []
     run = state.run as Map
     List<Map> events = ((run.events ?: []) as List<Map>).findAll { (it.at as Long) >= (run.testStartMs as Long) }
     if (test == 0) {
@@ -521,7 +729,7 @@ void finishTest() {
         }
     } else {
         // Device info and the art test read /api/v2/ directly: the driver's trace has only its key names.
-        Map info = (test in [1, 7, 10]) ? fetchDeviceInfo() : null
+        Map info = (test in [1, 7, 6]) ? fetchDeviceInfo() : null
         run = state.run as Map
         Map r = evaluateTest(test, lines, steps, run, events, info)
         if (test == 1 && info) r.observed = (r.observed as Map) + deviceInfoFields(info, DEVICE_INFO_KEYS)
@@ -534,10 +742,23 @@ void finishTest() {
     advance(run)
 }
 
-private Map fetchDeviceInfo() {
+// Booleans only: a MAC address never goes into the report. The hub's own lookup may be missing or fail.
+private Map macChecks(Map info, String deviceMac, String ip) {
+    String hubMatch = "unavailable"
+    try {
+        String hubMac = getMACFromIP(ip)
+        if (hubMac) hubMatch = macsMatch(hubMac, deviceMac).toString()
+    } catch (e) {
+        logDebug "getMACFromIP failed: ${e.message}"
+    }
+    return [macMatchesTv: macsMatch(deviceMac, (info?.device as Map)?.wifiMac as String),
+            macMatchesHub: hubMatch == "unavailable" ? "unavailable" : hubMatch == "true"]
+}
+
+private Map fetchDeviceInfo(int timeoutS = 6) {
     Map out = [status: null]
     try {
-        httpGet([uri: "http://${tv.getSetting('deviceIp')}:8001", path: "/api/v2/", timeout: 6]) { resp ->
+        httpGet([uri: "http://${tv.getSetting('deviceIp')}:8001", path: "/api/v2/", timeout: timeoutS]) { resp ->
             out.status = resp.status
             def d = resp.data
             if (d instanceof Map) { out.device = d.device; out.version = d.version; out.isSupport = d.isSupport }
@@ -553,23 +774,34 @@ Map evaluateTest(int test, List<Map> lines, Map steps, Map run, List<Map> events
     TimeZone tz = location.timeZone
     Map f
     switch (test) {
-        case 1: f = evalDeviceInfo(lines, tv.getDataValue("powerStateReported")); break
+        case 1:
+            f = evalDeviceInfo(lines, tv.getDataValue("powerStateReported"))
+            f.putAll(macChecks(info, tv.getDataValue("deviceMac"), tv.getSetting("deviceIp") as String))
+            break
         case 2: f = evalRemoteSocket(lines, events, tz); break
         case 3: f = evalBurst(lines); break
-        case 4: f = evalPowerOff(lines, events, steps, run.testStartMs as Long, tz, run.ctx.alreadyOff == true); break
-        case 5: f = evalPowerOn(lines, events, steps, run.testStartMs as Long, tz); break
-        case 6: f = evalStandby(lines, events); break
+        case 4: f = evalApps(lines, events, steps); break
+        case 5: f = evalAppList(lines); break
+        case 6: f = evalDiscovery(lines, tv.getSetting("deviceIp") as String); break
         case 7: f = evalArt(lines, events); break
-        case 8: f = evalApps(lines, events, steps); break
-        case 9: f = evalAppList(lines); break
-        case 10: f = evalDiscovery(lines, tv.getSetting("deviceIp") as String); break
+        case 8: f = evalPowerOff(lines, events, steps, run.testStartMs as Long, tz, run.ctx.alreadyOff == true, (steps.hold?.readings ?: []) as List); break
+        case 9: f = evalStandby(lines, events); break
+        case 10:
+            // Times run from the on() call, which is the watch step's start.
+            Long onAt = (steps.watch?.at ?: run.testStartMs) as Long
+            f = evalPowerOn(lines, events, steps, onAt, tz, (steps.watch?.readings ?: []) as List,
+                            pictureMs((run.prompts as Map)?.picture as Map, onAt), (run.pollS ?: 60) as int, steps.watch?.watchMs as Long)
+            break
         default: f = [:]
     }
+    f.putAll(promptFields(test, (run.prompts ?: [:]) as Map))
     String other = otherMessages(lines, KNOWN_EVENTS, KNOWN_ART_EVENTS)
     if (other) f.otherMessages = other
     r.observed = f
     // Discovery is judged by the TV's model year, read from its REST model field.
     Map expect = (test == 10) ? discoveryExpect(modelYear((info?.device as Map)?.model as String)) : (EXPECT[test] as Map)
+    // A TV that reports PowerState is not probed by the driver, so the probe's reply is recorded without a judgement.
+    if (test == 9 && run.ctx.powerState) expect = expect.findAll { k, v -> k != "probeReply" }
     r.diffs = differences(f, expect)
     r.putAll(splitDiffs(r.diffs as List, expect))
     if (r.diffs) r.trace = traceLines(lines)
@@ -581,27 +813,48 @@ List<Map> stepsFor(int test, Map run) {
     switch (test) {
         case 0:
             // A TV that is off gets Wake-on-LAN; it then answers a poll within about 30 s of booting.
-            if (run.ctx.startSwitch == "off") return [[name: "powerOn", cmd: "on", wait: '^rest: status=200', timeout: poll + 60, after: 3]]
+            if (run.ctx.startSwitch == "off") return [[name: "powerOn", label: "Waiting for the TV to wake and answer", cmd: "on", wait: '^rest: status=200', timeout: poll + 60, after: 3]]
             // Refresh polls at once; a driver older than that is caught by the scheduled poll.
-            return [[name: "poll", cmd: "refresh", wait: '^rest: status=', timeout: poll + 15]]
-        case 1: return [[name: "poll", wait: '^rest: status=', timeout: poll + 15, sinceRun: true]]
-        case 2: return [[name: "close", cmd: "close", after: 2],
-                        [name: "home", cmd: "home", wait: '^rx remote: .*"ms\\.channel\\.(connect|unauthorized|timeOut)"', timeout: 15, after: 2]]
-        case 3: return [[name: "close", cmd: "close", after: 2],
-                        [name: "burst", cmd: "burst", wait: '^tx remote: .*KEY_HOME', timeout: 15],
-                        [name: "settle", sleep: 4]]
-        case 4: return [[name: "off", cmd: "off", wait: run.ctx.alreadyOff ? '^off: ' : '^setPowerState: \\[switch: off\\]', timeout: poll + 20],
-                        [name: "hold", sleep: poll + 10]]
-        case 5: return [[name: "on", cmd: "on", wait: '^setPowerState: \\[switch: on\\]', timeout: Math.max(60, poll + 30), after: 5]]
-        case 6: return [[name: "probe", cmd: "refresh", wait: '^rx remote: .*"ms\\.channel\\.timeOut"|^ws remote: (failure|status: open)', timeout: poll + 20],
-                        [name: "settle", sleep: 5]]
-        case 7: return [[name: "status", cmd: "configure", wait: '^rx frameArt: .*artmode_status', timeout: 20, after: 2],
-                        [name: "set", cmd: "artMode", wait: '^rx frameArt: .*(art_mode_changed|set_artmode_status)|^tx remote: .*KEY_POWER|already set', timeout: 20, after: 3]]
-        case 8: return [[name: "launch", cmd: "appOpenByName", args: [run.ctx.app ?: "YouTube"], wait: '^app: POST', timeout: 25, after: 5],
-                        [name: "close", cmd: "appClose", wait: '^app: DELETE', timeout: 15, after: 2]]
-        case 9: return [[name: "list", cmd: "getInstalledApps", wait: '^rx remote: .*ed\\.installedApp\\.get', timeout: 12]]
+            return [[name: "poll", label: "Waiting for the driver's poll of the TV", cmd: "refresh", wait: '^rest: status=', timeout: poll + 15]]
+        case 1: return [[name: "poll", label: "Waiting for the driver's poll of the TV", wait: '^rest: status=', timeout: poll + 15, sinceRun: true]]
+        case 2:
+            // Three connects: the first after a long idle is often the slow one. When the device has no token the
+            // first one makes the TV ask for Allow, so it waits for the person.
+            boolean allow = run.ctx.allow == true
+            List<Map> steps = []
+            3.times { int i ->
+                steps << [name: "close${i + 1}".toString(), label: "Closing the remote socket", cmd: "close", after: 2]
+                Map home = [name: "home${i + 1}".toString(), label: "Waiting for the TV to answer a connect", cmd: "home",
+                            wait: '^rx remote: .*"ms\\.channel\\.(connect|unauthorized|timeOut)"', timeout: 15, after: 2]
+                if (i == 0 && allow) home += [label: "Waiting for you to choose Allow on the TV", prompt: "allow", timeout: 60]
+                steps << home
+                // The first home key is the one a person can see work; ask once the handshake is over.
+                if (i == 0) steps << [name: "homeSeen", label: "Waiting for your answer", prompt: "home", timeout: 20]
+            }
+            return steps
+        case 3: return [[name: "close", label: "Closing the remote socket", cmd: "close", after: 2],
+                        [name: "burst", label: "Sending three keys", cmd: "burst", wait: '^tx remote: .*KEY_HOME', timeout: 15],
+                        [name: "settle", label: "Letting the TV settle", sleep: 4]]
+        case 4: return [[name: "launch", label: "Launching the app", cmd: "appOpenByName", args: [run.ctx.app ?: "YouTube"], wait: '^app: POST', timeout: 25, after: 5],
+                        [name: "app", label: "Waiting for your answer", prompt: "app", timeout: 30],
+                        [name: "close", label: "Closing the app", cmd: "appClose", wait: '^app: DELETE', timeout: 15, after: 2]]
+        case 5: return [[name: "list", label: "Waiting for the TV's app list", cmd: "getInstalledApps", wait: '^rx remote: .*ed\\.installedApp\\.get', timeout: 12]]
         // The search starts after 1 s, blocks up to 6 s, and its outcome (logged last, at info or warn) follows 7 s later.
-        case 10: return [[name: "find", cmd: "findTvs", wait: '^(No Samsung TV answered|Found )', timeout: 20, after: 1]]
+        case 6: return [[name: "find", label: "Searching the network for the TV", cmd: "findTvs", wait: '^(No Samsung TV answered|Found )', timeout: 20, after: 1],
+                         [name: "airplay", label: "Waiting for your answer", prompt: "airplay", onlyIf: "airplay", timeout: 30]]
+        case 7: return [[name: "status", label: "Reading the art mode status", cmd: "configure", wait: '^rx frameArt: .*artmode_status', timeout: 20, after: 2],
+                        [name: "set", label: "Setting art mode", cmd: "artMode", wait: '^rx frameArt: .*(art_mode_changed|set_artmode_status)|^tx remote: .*KEY_POWER|already set', timeout: 20, after: 3],
+                        [name: "art", label: "Waiting for your answer", prompt: "art", timeout: 30]]
+        // The TV's REST page is read every 5 s during the hold: how it goes away is what the driver's power state follows.
+        case 8: return [[name: "off", label: "Waiting for the driver to report off", cmd: "off", wait: run.ctx.alreadyOff ? '^off: ' : '^setPowerState: \\[switch: off\\]', timeout: poll + 20,
+                         prompt: "screenOff", promptTimeout: 30, concurrent: true],
+                        [name: "hold", label: "Watching the TV after power off", watch: "hold", timeout: poll + 10, endsPrompt: true]]
+        // The probe is a socket command with the TV in standby, whatever the TV reports for PowerState.
+        case 9: return [[name: "probe", label: "Waiting for the TV in standby to answer a connect", cmd: "getInstalledApps",
+                         wait: '^rx remote: .*"ms\\.channel\\.timeOut"|^ws remote: (failure|status: open)', timeout: 25],
+                        [name: "settle", label: "Letting the TV settle", sleep: 5]]
+        // The person says when the picture is on; the watch reads REST and the driver's switch meanwhile.
+        case 10: return [[name: "watch", label: "Waiting for the TV to report on", cmd: "on", watch: "on", prompt: "picture", timeout: 120, after: 5]]
         default:
             return []
     }
@@ -610,34 +863,222 @@ List<Map> stepsFor(int test, Map run) {
 
 // ── Script endpoints ──────────────────────────────────────────────────
 
+private def json(Map data) {
+    render(status: 200, contentType: "application/json", data: JsonOutput.toJson(data))
+}
+
+private Map failure(String text) { [ok: false, error: text] }
+
+def apiUi() {
+    checkOAuth()
+    String html = null
+    try {
+        html = readFile(UI_FILE)
+    } catch (Exception e) {
+        logWarn "Could not read ${UI_FILE}: ${maskLine(e.message)}"
+    }
+    if (html == null) {
+        syncUI()
+        return render(status: 200, contentType: "text/html", data: "<html><head><meta http-equiv='refresh' content='10'></head><body>" +
+            "Downloading the page from GitHub. This page reloads every 10 seconds. If it never appears, upload " +
+            "<code>${UI_FILE}</code> to the hub's File Manager and check the hub logs.</body></html>")
+    }
+    if (!html.contains("const CODE_VERSION = '${CODE_VERSION}'")) syncUI()
+    return render(status: 200, contentType: "text/html", data: html)
+}
+
 def apiRun() {
-    if (checkVersion(false)) updated()     // as in appButtonHandler
-    List<Integer> tests = params.tests ? (params.tests as String).tokenize(",").collect { it.trim() as Integer } : null
-    String err = startRun([tests: tests])
-    if (err) return render(status: err.contains("in progress") ? 409 : 400, contentType: "application/json", data: JsonOutput.toJson([error: err]))
-    return render(status: 200, contentType: "application/json", data: JsonOutput.toJson([started: true]))
+    checkOAuth()
+    if (checkVersion(false)) updated()     // a new version re-initializes before it starts a run
+    List<Integer> tests = null
+    if (params.tests) {
+        try {
+            tests = (params.tests as String).tokenize(",").collect { it.trim() as Integer }
+        } catch (e) {
+            return json(failure("tests must be comma-separated test numbers"))
+        }
+        Integer bad = tests.find { !TEST_NAMES.containsKey(it) || it == 0 }
+        if (bad != null) return json(failure("unknown test ${bad}".toString()))
+    }
+    String err = startRun([tests: tests, powerOnWithMobile: params.powerOnWithMobile, ipRemote: params.ipRemote, attended: params.attended])
+    return json(err ? failure(err) : [ok: true])
 }
 
 def apiStatus() {
+    checkOAuth()
     checkVersion()
     checkStall()
     Map run = (state.run ?: [:]) as Map
-    Integer test = run.tests ? (run.tests[run.idx as int] as Integer) : null
-    return render(status: 200, contentType: "application/json",
-                  data: JsonOutput.toJson([status: run.status, test: test, idx: run.idx, of: (run.tests as List)?.size(), step: run.step]))
+    Map prompt = publicPrompt(state.prompt as Map, now())
+    return json([appVersion: CODE_VERSION, nowMs: now(),
+                 device: [name: tv?.displayName, switch: tv?.currentValue("switch"), wsStatus: tv?.currentValue("wsStatus"), selected: tv != null,
+                          frame: tv?.getDataValue("frameTv") == "true"],
+                 setup: (state.setup ?: [powerOnWithMobile: "unknown", ipRemote: "unknown", attended: "yes"]),
+                 run: statusRun(run, TEST_NAMES), prompt: prompt, lastTimeout: state.lastTimeout, reportReady: state.report != null,
+                 padLog: padLogView(state.padLog as List, 20)])
 }
 
 def apiAbort() {
+    checkOAuth()
     checkVersion()
-    finishRun("aborted", "aborted by the script")
-    return render(status: 200, contentType: "application/json", data: JsonOutput.toJson([status: (state.run as Map)?.status]))
+    finishRun("aborted", "aborted by the user")
+    return json([ok: true])
+}
+
+def apiAnswer() {
+    checkOAuth()
+    Map res = answerPrompt(state.prompt as Map, params.id as String, params.choice as String, now())
+    if (!res.ok) return json(failure(res.error as String))
+    state.prompt = res.prompt
+    return json([ok: true])
 }
 
 def apiReport() {
+    checkOAuth()
     checkVersion()
     Map run = (state.run ?: [:]) as Map
-    return render(status: 200, contentType: "application/json",
-                  data: JsonOutput.toJson([status: run.status, reason: run.reason, report: state.report, results: run.results]))
+    Map profile = profileFields((run.results ?: []) as List<Map>)
+    // results and reason are for tests/test-live-tv.sh
+    return json([status: run.status, reason: run.reason, report: state.report, profile: profile ?: null, results: run.results])
+}
+
+// The remote pad: one key at a time, never during a run, which owns the TV's sockets.
+def apiKey() {
+    checkOAuth()
+    checkStall()
+    if ((state.run as Map)?.status == "running") return json(failure(BUSY))
+    if (!tv) return json(failure("select the Samsung TV Remote device"))
+    Map cmd = padCommand(params.name as String, params.key as String)
+    if (!cmd.ok) return json(failure(cmd.error as String))
+    padPressed(params.name as String, cmd)
+    deviceCommand(cmd.method as String, cmd.args as List)
+    return json([ok: true])
+}
+
+def apiPadLogClear() {
+    checkOAuth()
+    state.padLog = []
+    return json([ok: true])
+}
+
+// ── Pad log ───────────────────────────────────────────────────────────
+
+// A pad press outside a run: trace logging goes on for the driver (remembering how it was), the press is
+// recorded, and 4 s later the driver's lines since it are read and attached to the entry.
+private void padPressed(String name, Map cmd) {
+    long t = now()
+    Map pt = (state.padTrace ?: [:]) as Map
+    if (!pt.active) {
+        pt = [active: true, prev: tv.getSetting("traceLog") == true]
+        tv.updateSetting("traceLog", [value: "true", type: "bool"])
+    }
+    state.padTrace = pt
+    runIn(PAD_TRACE_S, "padTraceRestore")      // re-armed by each press
+    String key = name == "sendKey" ? "KEY_" + (((cmd.args as List)[0] as Map).value as String) : null
+    state.padLog = padLogAppend(state.padLog as List, [atMs: t, since: tsAt(t), button: name, key: key, lines: []], PAD_LOG_MAX)
+    runIn(4, "padCollect", [data: [atMs: t], overwrite: false])
+}
+
+void padTraceRestore() {
+    Map pt = state.padTrace as Map
+    if (!pt?.active) return
+    state.remove("padTrace")
+    try {
+        if (tv) tv.updateSetting("traceLog", [value: pt.prev ? "true" : "false", type: "bool"])
+    } catch (e) {
+        logWarn "Could not restore trace logging: ${e.message}"
+    }
+}
+
+void padCollect(Map data) {
+    Map e = ((state.padLog ?: []) as List<Map>).find { (it.atMs as long) == (data.atMs as long) }
+    if (e == null) return
+    readTvLinesAsync("padLines", e.since as String, [atMs: data.atMs])
+}
+
+void padLines(resp, Map data) {
+    try {
+        List<Map> lines = linesFrom(resp, data)
+        if (lines == null) return
+        List<Map> log = (state.padLog ?: []) as List<Map>
+        Map entry = log.find { (it.atMs as long) == (data.atMs as long) }
+        if (entry == null) return
+        // Up to the next press, or the 4 s window when that comes first.
+        Map later = log.find { (it.atMs as long) > (entry.atMs as long) }
+        String windowEnd = tsAt((entry.atMs as long) + 4000L)
+        String until = later && (later.since as String) < windowEnd ? later.since as String : windowEnd
+        entry.lines = padEntryLines(lines, until)
+        state.padLog = log
+    } catch (ex) {
+        logWarn "Pad log read failed: ${ex.message}"
+    }
+}
+
+// The remote pad's button ids are the driver's command names; "sendKey" carries a key name typed by the user.
+Map padCommand(String name, String key = null) {
+    List ids = ["on", "off", "arrowUp", "arrowDown", "arrowLeft", "arrowRight", "enter", "Return", "home", "exit",
+                "menu", "guide", "sourceSetOSD", "sourceToggle", "numericKeyPad", "channelUp", "channelDown", "channelList",
+                "previousChannel", "volumeUp", "volumeDown", "mute", "play", "pause", "stop", "fastBack", "fastForward",
+                "artMode", "ambientMode"]
+    if (name == "sendKey") {
+        String k = (key ?: "").toUpperCase()
+        if (k.startsWith("KEY_")) k = k.substring(4)
+        if (!(k ==~ /[A-Z0-9_]{1,30}/)) return [ok: false, error: "unknown key"]
+        return [ok: true, method: "sendKey", args: [[type: "STRING", value: k]]]
+    }
+    if (!(name in ids)) return [ok: false, error: "unknown key"]
+    return [ok: true, method: name, args: []]
+}
+
+
+// ── Page file ─────────────────────────────────────────────────────────
+
+// Null for a missing file: it throws up to 2.5.2 and from 2.5.3.105, and returns null on 2.5.3.102.
+private String readFile(String name) {
+    for (int i = 1; ; i++) {
+        try {
+            byte[] bytes = downloadHubFile(name)
+            return bytes == null ? null : new String(bytes, "UTF-8")
+        } catch (NoSuchFileException ignored) {
+            return null
+        } catch (Exception e) {
+            if (i >= 3) throw e
+            pauseExecution(500)
+        }
+    }
+}
+
+private boolean writeFile(String name, String text) {
+    for (int i = 1; i <= 3; i++) {
+        try {
+            uploadHubFile(name, text.getBytes("UTF-8"))
+            return true
+        } catch (Exception e) {
+            logWarn "Could not write ${name} (${i} of 3): ${maskLine(e.message)}"
+            if (i < 3) pauseExecution(500)
+        }
+    }
+    return false
+}
+
+void syncUI() {
+    if (state.uiSyncAt && now() - (state.uiSyncAt as long) < 3600000L) return
+    state.uiSyncAt = now()
+    asynchttpGet("syncUICallback", [uri: UI_URL, textParser: true, timeout: 30], [:])
+}
+
+void syncUICallback(resp, data) {
+    if (resp.hasError() || resp.getStatus() != 200) {
+        logWarn "Could not download the page: HTTP ${resp.getStatus()}"
+        return
+    }
+    String html = resp.getData() as String
+    // A partial body, or a commit where app and page haven't been changed together yet, is refused.
+    if (!html?.contains("const CODE_VERSION = '${CODE_VERSION}'")) {
+        logWarn "The page on GitHub does not match version ${CODE_VERSION}"
+        return
+    }
+    if (writeFile(UI_FILE, html)) state.remove("uiSyncAt")
 }
 
 
@@ -809,9 +1250,21 @@ Map evalRemoteSocket(List<Map> lines, List<Map> events, TimeZone tz) {
         def m = (reply.msg as String) =~ /"(ms\.channel\.(?:connect|unauthorized|timeOut))"/
         if (m.find()) handshake = m.group(1)
     }
-    Long ms = (open && reply) ? tsMs(reply.ts as String, tz) - tsMs(open.ts as String, tz) : null
-    Map f = [handshake: handshake, connectMs: ms, tokenInReply: reply ? (reply.msg as String).contains('"token"') : null,
-             openEvent: hasEvent(events, "wsStatus", "open")]
+    // Each open is timed to the first answer after it; the slowest of the connects is what the driver has to live with.
+    List<Long> all = []
+    for (int i = 0; i < lines.size(); i++) {
+        if (!((lines[i].msg as String).startsWith("ws remote: status: open"))) continue
+        for (int j = i + 1; j < lines.size(); j++) {
+            String msg = lines[j].msg as String
+            if (msg.startsWith("ws remote: status: open")) break
+            if (msg =~ '^rx remote: .*"ms\\.channel\\.(connect|unauthorized|timeOut)"') {
+                all << (tsMs(lines[j].ts as String, tz) - tsMs(lines[i].ts as String, tz))
+                break
+            }
+        }
+    }
+    Map f = [handshake: handshake, connectMs: all ? all.max() : null, connectMsAll: all,
+             tokenInReply: reply ? (reply.msg as String).contains('"token"') : null, openEvent: hasEvent(events, "wsStatus", "open")]
     // A key can only go out after the TV accepted the connection.
     if (handshake == "ms.channel.connect") f.keySent = firstLine(lines, '^tx remote: .*KEY_HOME') != null
     return f
@@ -824,26 +1277,81 @@ Map evalBurst(List<Map> lines) {
 }
 
 // How the TV went away after off: REST stopped answering, it reported standby, or its socket timed out.
-Map evalPowerOff(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz, boolean alreadyOff) {
+// The readings are the tester's own reads of the TV's REST page during the hold.
+Map evalPowerOff(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz, boolean alreadyOff, List<Map> readings = []) {
+    Map rd = summarizeReadings(readings)
     List<String> how = []
-    if (lines.any { (it.msg as String) =~ /^rest: status=(?!200)/ }) how << "REST stopped"
-    if (lines.any { (it.msg as String) =~ /^rest: status=200 .*PowerState=standby/ }) how << "PowerState standby"
+    if (lines.any { (it.msg as String) =~ /^rest: status=(?!200)/ } || rd.stoppedS != null) how << "REST stopped"
+    if (lines.any { (it.msg as String) =~ /^rest: status=200 .*PowerState=standby/ } || rd.standbyS != null) how << "PowerState standby"
     if (lines.any { (it.msg as String) =~ /^rx remote: .*ms\.channel\.timeOut/ }) how << "socket timeout"
     // The driver sends switch on every poll, so an off TV still produces off events.
     Map off = events.find { it.name == "switch" && it.value == "off" }
     boolean flap = off != null && events.any { it.name == "switch" && it.value == "on" && (it.at as Long) > (off.at as Long) }
-    // The last answer after off, to the poll: how long the TV keeps answering REST once told to turn off.
+    // The last answer after off, to the poll or a reading: how long the TV keeps answering REST once told to turn off.
     Map last = lines.reverse().find { (it.msg as String).startsWith("rest: status=200") }
     Long after = last ? Math.round((tsMs(last.ts as String, tz) - startMs) / 1000.0d) : 0L
-    Map f = [offEvent: off != null, noFlap: !flap, wentAway: how ? how.join(", ") : "still answering", restAfterOffS: after]
+    if (rd.lastAnswerS != null && (rd.lastAnswerS as long) > after) after = rd.lastAnswerS as Long
+    Map f = [offEvent: off != null, noFlap: !flap, wentAway: how ? how.join(", ") : "still answering", restAfterOffS: after,
+             restStandbyS: rd.standbyS, restStoppedS: rd.stoppedS, readings: rd.text]
     if (alreadyOff) f.alreadyOff = true else f.offMs = steps.off?.ok ? steps.off.ms : null
     return f
 }
 
-Map evalPowerOn(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz) {
+// The TV's REST page read as the PowerState the driver would see: "none" for no answer, "absent" for an answer without it.
+String readingValue(Map info) {
+    if (info?.status != 200) return "none"
+    String ps = (info.device as Map)?.PowerState?.toString()?.trim()?.toLowerCase()
+    return ps ?: "absent"
+}
+
+// readings: [ms: since the step's base, v: readingValue]. Seconds are rounded; the text is "0s:none 5s:standby 10s:on".
+Map summarizeReadings(List<Map> readings) {
+    List<String> parts = []
+    Integer standbyS = null, stoppedS = null, lastAnswerS = null
+    Long onMs = null
+    for (Map r : (readings ?: [])) {
+        int sec = Math.round((r.ms as long) / 1000.0d) as int
+        String v = r.v as String
+        parts << "${sec}s:${v}".toString()
+        if (v == "standby" && standbyS == null) standbyS = sec
+        if (v == "none" && stoppedS == null) stoppedS = sec
+        if (v != "none") lastAnswerS = sec
+        if (v == "on" && onMs == null) onMs = r.ms as Long
+    }
+    return [text: parts.join(" "), standbyS: standbyS, stoppedS: stoppedS, lastAnswerS: lastAnswerS, onMs: onMs]
+}
+
+// startMs is the on() call. picture is pictureMs(): ms, "never", "no answer", or null when no question was asked.
+Map evalPowerOn(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz, List<Map> readings = [],
+                Object picture = null, int pollS = 60, Long watchMs = null) {
     Map rest = lines.find { (it.msg as String).startsWith("rest: status=200") }
-    return [onEvent: hasEvent(events, "switch", "on"), onMs: steps.on?.ok ? steps.on.ms : null,
-            wolSends: countLines(lines, '^wol: sent'), firstAnswerMs: rest ? tsMs(rest.ts as String, tz) - startMs : null]
+    Map rd = summarizeReadings(readings)
+    Map on = events.find { it.name == "switch" && it.value == "on" && (it.at as Long) >= startMs }
+    Long onMs = on ? (on.at as Long) - startMs : null
+    Long restOnMs = rd.onMs as Long
+    Long pictureAt = picture instanceof Number ? (picture as Long) : null
+    // Late by 15 s or more: the picture was there well before REST said on.
+    boolean powerStateLags = restOnMs != null && pictureAt != null && restOnMs - pictureAt >= 15000L
+    // REST said on, and the driver's switch followed neither within a poll interval and 10 s nor before the watch ended.
+    long limit = (restOnMs ?: 0L) + pollS * 1000L + 10000L
+    boolean switchLags = restOnMs != null && (onMs != null ? onMs > limit : (watchMs != null && watchMs > limit))
+    Map f = [onEvent: on != null, onMs: onMs]
+    // A TV without PowerState never says on in REST; leave the field out rather than judge it.
+    boolean noPowerState = restOnMs == null && readings.any { it.v == "absent" } && !readings.any { it.v in ["on", "standby"] }
+    if (!noPowerState) f.restOnMs = restOnMs
+    if (picture != null) f.pictureMs = picture
+    f.putAll([readings: rd.text, powerStateLags: powerStateLags, switchLags: switchLags,
+              wolSends: countLines(lines, '^wol: sent'), firstAnswerMs: rest ? tsMs(rest.ts as String, tz) - startMs : null])
+    return f
+}
+
+// Milliseconds from on() to the person's "picture is on"; null when no question was asked.
+Object pictureMs(Map prompt, Long startMs) {
+    if (prompt == null) return null
+    if (prompt.notAsked) return "not asked"
+    if (prompt.choice == "on") return (prompt.atMs as Long) - startMs
+    if (prompt.choice == "never") return "never"
+    return "no answer"
 }
 
 // A TV without PowerState is probed by opening its remote socket; in standby it should answer timeOut.
@@ -967,7 +1475,7 @@ String otherMessages(List<Map> lines, List known, List knownArt) {
 // The protocol lines a maintainer needs to build a mock profile, kept even when the test passes.
 List<String> sampleLines(int test, List<Map> lines) {
     String re = [2: '^rx remote: .*"ms\\.channel\\.(connect|unauthorized|timeOut)"', 7: '^rx frameArt: ',
-                 9: '^rx remote: .*ed\\.installedApp\\.get', 6: '^rx remote: '][test]
+                 5: '^rx remote: .*ed\\.installedApp\\.get', 9: '^rx remote: '][test]
     if (!re) return []
     List<String> out = []
     for (Map l : lines) {
@@ -976,6 +1484,158 @@ List<String> sampleLines(int test, List<Map> lines) {
         if (out.size() >= 6) break
     }
     return out
+}
+
+// 12 upper-case hex digits from any MAC notation; null when the text is not a MAC address.
+String normalizeMac(String mac) {
+    String hex = (mac ?: "").replaceAll(/[^0-9A-Fa-f]/, "").toUpperCase()
+    return hex.length() == 12 && (mac ?: "").replaceAll(/[0-9A-Fa-f:.\-]/, "") == "" ? hex : null
+}
+
+// False when either side is missing or not a MAC.
+boolean macsMatch(String a, String b) {
+    String x = normalizeMac(a)
+    return x != null && x == normalizeMac(b)
+}
+
+// The TV shows its Allow prompt to a client with no token; the driver keeps a placeholder until the TV sends one.
+boolean needsAllow(String tokenSupport, Object token) {
+    return tokenSupport == "true" && (token == null || token.toString() in ["", "12345678"])
+}
+
+// ── Pad log: pure helpers ──
+
+// A run restores the trace setting the person had before the pad touched it (the pad's remembered value
+// while it is active), else the device's current one.
+boolean runStartTrace(Map padTrace, Object current) {
+    return padTrace?.active ? padTrace.prev == true : current == true
+}
+
+// The log with one more entry, the oldest dropped beyond the cap.
+List<Map> padLogAppend(List log, Map entry, int cap) {
+    List<Map> out = ((log ?: []) + [entry]) as List<Map>
+    if (out.size() > cap) out = out.drop(out.size() - cap) as List<Map>
+    return out
+}
+
+// The driver's trace, warn and error lines of one press, masked: up to the cut-off timestamp, at most
+// maxLines and about 2000 characters, so fifty entries stay small in the app's state.
+List<String> padEntryLines(List<Map> lines, String untilTs, int maxLines = 15) {
+    List<String> out = []
+    int chars = 0
+    for (String l : traceLines(lines.findAll { (it.ts as String) < untilTs })) {
+        String cut = l.take(200)
+        if (out.size() >= maxLines || chars + cut.length() > 2000) break
+        out << cut
+        chars += cut.length()
+    }
+    return out
+}
+
+// The last n entries as the page sees them (newest last).
+List<Map> padLogView(List log, int n) {
+    List<Map> l = ((log ?: []) as List<Map>)
+    if (l.size() > n) l = l.drop(l.size() - n) as List<Map>
+    return l.collect { Map e -> [atMs: e.atMs, button: e.button, key: e.key, lines: (e.lines ?: [])] }
+}
+
+String padEntryText(Map e, TimeZone tz) {
+    List<String> out = ["${new Date(e.atMs as long).format('HH:mm:ss', tz)} ${e.button}${e.key ? ' ' + e.key : ''}".toString()]
+    ((e.lines ?: []) as List).each { out << "   ${it}".toString() }
+    return out.join("\n")
+}
+
+// The report's "Manual keys" section: presses after fromMs up to toMs; empty when there are none.
+String padSection(List log, long fromMs, long toMs, TimeZone tz) {
+    List<Map> hit = ((log ?: []) as List<Map>).findAll { (it.atMs as long) > fromMs && (it.atMs as long) <= toMs }
+    if (!hit) return ""
+    List<String> out = ["Manual keys (remote pad presses since the previous report)"]
+    hit.each { out << padEntryText(it, tz) }
+    return out.join("\n")
+}
+
+// ── Prompts: what the person is asked, and the bookkeeping of the answer ──
+
+// kind -> [text, choices]. The page shows the text and one button per choice.
+Map promptSpec(String kind, boolean frame = false) {
+    switch (kind) {
+        case "allow": return [text: "Choose Allow on the TV.", choices: [[id: "done", label: "Done"]]]
+        case "picture": return [text: "Click when the picture is on.",
+                                choices: [[id: "on", label: "Picture is on"], [id: "never", label: "It didn't come on"]]]
+        case "home": return [text: "Did the TV go to its home screen?",
+                             choices: [[id: "yes", label: "Home screen showed"], [id: "no", label: "Nothing happened"]]]
+        case "screenOff":
+            List choices = [[id: "off", label: "Screen went off"], [id: "on", label: "Still on"]]
+            if (frame) choices << [id: "art", label: "Shows art"]
+            return [text: "Did the screen go off?", choices: choices]
+        case "art": return [text: "Is the TV showing art?", choices: [[id: "art", label: "Art is showing"], [id: "noart", label: "No art"]]]
+        case "app": return [text: "Did the app open on the TV?", choices: [[id: "opened", label: "The app opened"], [id: "not", label: "It didn't open"]]]
+        case "airplay": return [text: "Does the TV offer AirPlay (Settings, General, Apple AirPlay Settings)?",
+                                choices: [[id: "yes", label: "Yes"], [id: "no", label: "No"], [id: "unknown", label: "Don't know"]]]
+        default: throw new IllegalArgumentException("unknown prompt ${kind}")
+    }
+}
+
+Map newPrompt(String kind, String id, int test, long nowMs, int deadlineS, boolean frame = false) {
+    Map spec = promptSpec(kind, frame)
+    return [id: id, test: test, kind: kind, text: spec.text, choices: spec.choices, askedAtMs: nowMs,
+            deadlineMs: nowMs + deadlineS * 1000L, answer: null]
+}
+
+// "open" until answered or past its deadline.
+String promptOutcome(Map prompt, long nowMs) {
+    if (prompt.answer != null) return "answered"
+    return nowMs >= (prompt.deadlineMs as long) ? "expired" : "open"
+}
+
+// An answer for the open prompt only: a stale id, an answered or expired prompt, or an unknown choice is refused.
+Map answerPrompt(Map prompt, String id, String choice, long nowMs) {
+    if (prompt == null || prompt.id != id || promptOutcome(prompt, nowMs) != "open") return [ok: false, error: "stale prompt"]
+    if (!((prompt.choices as List<Map>)*.id).contains(choice)) return [ok: false, error: "unknown choice"]
+    return [ok: true, prompt: prompt + [answer: [choice: choice, atMs: nowMs]]]
+}
+
+// The prompt as the page sees it: null once answered or past its deadline.
+Map publicPrompt(Map prompt, long nowMs) {
+    if (prompt == null || promptOutcome(prompt, nowMs) != "open") return null
+    return [id: prompt.id, test: prompt.test, kind: prompt.kind, text: prompt.text, choices: prompt.choices,
+            askedAtMs: prompt.askedAtMs, deadlineMs: prompt.deadlineMs]
+}
+
+// Report fields from the answers of one test: nothing for a question that wasn't asked of this TV, "not asked" for one
+// nobody was there to answer, "no answer" for one that was left open.
+Map promptFields(int test, Map prompts) {
+    List kinds = [2: ["allow", "home"], 8: ["screenOff"], 7: ["art"], 4: ["app"], 6: ["airplay"]][test] ?: []
+    Map out = [:]
+    for (String kind : kinds) {
+        Map p = prompts[kind] as Map
+        if (p == null) continue
+        String c = p.choice
+        boolean skip = p.notAsked == true
+        switch (kind) {
+            case "allow": out.allowPrompt = skip ? "not asked" : (c ?: "no answer"); break
+            case "home": out.homeSeen = skip ? "not asked" : (c == null ? "no answer" : (c == "yes" ? "yes" : "no")); break
+            case "screenOff": out.screenOff = skip ? "not asked" : (c ?: "no answer"); break
+            case "art": out.artSeen = skip ? "not asked" : (c == null ? "no answer" : (c == "art" ? "yes" : "no")); break
+            case "app": out.appSeen = skip ? "not asked" : (c == null ? "no answer" : (c == "opened" ? "yes" : "no")); break
+            default: out.airplayOn = skip ? "not asked" : (c ?: "no answer")
+        }
+    }
+    return out
+}
+
+// The run for /status: rows, and the step in progress with its deadline for the countdown.
+Map statusRun(Map run, Map names) {
+    if (!run?.status) return [status: null, reason: null, startedAtMs: null, rows: [], current: null]
+    Map current = null
+    List tests = (run.tests ?: []) as List
+    if (run.status == "running" && (run.idx as int) < tests.size()) {
+        Integer t = tests[run.idx as int] as Integer
+        Map cur = (run.cur?.test == t ? run.cur : [:]) as Map
+        current = [test: t, name: names[t] ?: "Test ${t}".toString(), step: cur.step, label: cur.label ?: "Starting",
+                   startedAtMs: cur.startedAtMs, deadlineMs: cur.deadlineMs]
+    }
+    return [status: run.status, reason: run.reason, startedAtMs: run.startedAt, rows: testRows(run, names), current: current]
 }
 
 // Stalled: running, and the next callback is over a minute late. The minute covers a slow step and a busy hub.
@@ -1001,6 +1661,8 @@ String verdictText(Map r) {
     if (r.driverDiffs) parts << "driver differs (${(r.driverDiffs as List).join(', ')})".toString()
     List tvd = (r.tvDiffs != null ? r.tvDiffs : (r.driverDiffs ? [] : r.diffs)) as List
     if (tvd) parts << "TV differs (${tvd.join(', ')})".toString()
+    // Discovery heard only another device: say so, whatever the model year expects.
+    if (r.test == 6 && (r.observed as Map)?.result == "other") parts << "a Samsung device that isn't this TV answered"
     return parts ? parts.join("; ") : "as expected"
 }
 
@@ -1018,7 +1680,10 @@ List<Map> testRows(Map run, Map names) {
         String st
         String detail = ""
         if (r != null) { st = verdictOf(r); detail = verdictText(r) }
-        else if (run.status == "running" && i == idx) { st = "running"; detail = "step ${((run.step ?: 0) as int) + 1}".toString() }
+        else if (run.status == "running" && i == idx) {
+            st = "running"
+            detail = (run.cur?.test == t && run.cur?.label) ? run.cur.label as String : "step ${((run.step ?: 0) as int) + 1}".toString()
+        }
         else if (run.status == "running" && i > idx) st = "waiting"
         else st = "not run"
         rows << [test: t, name: names[t] ?: "Test ${t}".toString(), state: st, detail: detail]
@@ -1048,6 +1713,7 @@ String formatReport(Map header, List<Map> results) {
     out << ("TV: ${header.modelName ?: '?'} · platform ${header.platform ?: '?'} · API ${header.apiVersion ?: '?'} · " +
             "Frame ${header.frameTv ?: '?'} · token auth ${header.tokenSupport ?: '?'} · PowerState ${header.powerStateReported ?: '?'} · " +
             "SmartThings setting ${header.smartThings ? 'on' : 'off'}").toString()
+    out << "TV settings: Power On with Mobile ${header.powerOnWithMobile ?: 'unknown'} · IP Remote ${header.ipRemote ?: 'unknown'} · questions ${header.attended == 'no' ? 'off' : 'on'}".toString()
     out << "run: ${header.status} · polling ${header.pollS} s · slowest log read ${header.slowestReadMs ?: 0} ms".toString()
     out << "TV differs: the TV does something the driver doesn't assume · driver differs: the driver didn't act on what the TV sent"
     for (Map r : results) {
@@ -1065,6 +1731,10 @@ String formatReport(Map header, List<Map> results) {
             (r.trace as List).each { out << "     ${it}".toString() }
         }
     }
+    if (header.manualKeys) {
+        out << ""
+        out << (header.manualKeys as String)
+    }
     Map prof = profileFields(results)
     if (prof) {
         out << ""
@@ -1076,9 +1746,9 @@ String formatReport(Map header, List<Map> results) {
 
 // The report's fields a mock TV profile uses, taken from the tests that ran; otherMessages merged across tests.
 Map profileFields(List<Map> results) {
-    Map keys = [1: ["deviceInfo", "isSupport", "apiVersion"], 2: ["handshake", "connectMs"], 4: ["wentAway", "restAfterOffS"],
-                6: ["probeReply"], 7: ["artReady", "statusReply", "setReply", "powerStateInArt"],
-                8: ["launchMs", "closeBody"], 9: ["answered", "apps"]]
+    Map keys = [1: ["deviceInfo", "isSupport", "apiVersion"], 2: ["handshake", "connectMs"], 8: ["wentAway", "restAfterOffS"],
+                9: ["probeReply"], 7: ["artReady", "statusReply", "setReply", "powerStateInArt"],
+                4: ["launchMs", "closeBody"], 5: ["answered", "apps"]]
     Map prof = [:]
     Set<String> other = new LinkedHashSet<String>()
     for (Map r : results) {
@@ -1086,7 +1756,7 @@ Map profileFields(List<Map> results) {
         ((keys[r.test as Integer] ?: []) as List).each { k -> if (obs.containsKey(k)) prof[k] = obs[k] }
         if (obs.otherMessages) other.addAll((obs.otherMessages as String).tokenize(","))
     }
-    Map disc = results.find { it.test == 10 && (it.observed as Map)?.result == "found" }
+    Map disc = results.find { it.test == 6 && (it.observed as Map)?.result == "found" }
     if (disc) prof.airplay = [model: (disc.observed as Map).model]
     if (prof) prof.otherMessages = other.join(",")
     return prof
@@ -1108,3 +1778,4 @@ void logCfg  (String m) { if (txtEnable != false) log.info  logp('🔧') + m }
 void logVer  (String m) { log.warn  logp('🏷️') + m }
 void logWarn (String m) { log.warn  logp('⚠️') + m }
 void logError(String m) { log.error logp('🛑') + m }
+void logDebug(String m) { if (debugEnable) log.debug logp('🔍') + m }

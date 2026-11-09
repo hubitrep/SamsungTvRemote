@@ -38,8 +38,21 @@ List<String> SIGNATURES = [
     'Map evalDeviceInfo(List<Map> lines, String powerStateReported) {',
     'Map evalRemoteSocket(List<Map> lines, List<Map> events, TimeZone tz) {',
     'Map evalBurst(List<Map> lines) {',
-    'Map evalPowerOff(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz, boolean alreadyOff) {',
-    'Map evalPowerOn(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz) {',
+    'Map evalPowerOff(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz, boolean alreadyOff, List<Map> readings = []) {',
+    'String readingValue(Map info) {',
+    'Map summarizeReadings(List<Map> readings) {',
+    'Map evalPowerOn(List<Map> lines, List<Map> events, Map steps, Long startMs, TimeZone tz, List<Map> readings = [],',
+    'Object pictureMs(Map prompt, Long startMs) {',
+    'String normalizeMac(String mac) {',
+    'boolean macsMatch(String a, String b) {',
+    'boolean needsAllow(String tokenSupport, Object token) {',
+    'Map promptSpec(String kind, boolean frame = false) {',
+    'Map newPrompt(String kind, String id, int test, long nowMs, int deadlineS, boolean frame = false) {',
+    'String promptOutcome(Map prompt, long nowMs) {',
+    'Map answerPrompt(Map prompt, String id, String choice, long nowMs) {',
+    'Map publicPrompt(Map prompt, long nowMs) {',
+    'Map promptFields(int test, Map prompts) {',
+    'Map statusRun(Map run, Map names) {',
     'Map evalStandby(List<Map> lines, List<Map> events) {',
     'Map evalArt(List<Map> lines, List<Map> events) {',
     'Map evalApps(List<Map> lines, List<Map> events, Map steps) {',
@@ -59,6 +72,13 @@ List<String> SIGNATURES = [
     'String formatReport(Map header, List<Map> results) {',
     'Map profileFields(List<Map> results) {',
     'int pollGap(int timeoutS, Long lastReadMs) {',
+    'Map padCommand(String name, String key = null) {',
+    'boolean runStartTrace(Map padTrace, Object current) {',
+    'List<Map> padLogAppend(List log, Map entry, int cap) {',
+    'List<String> padEntryLines(List<Map> lines, String untilTs, int maxLines = 15) {',
+    'List<Map> padLogView(List log, int n) {',
+    'String padEntryText(Map e, TimeZone tz) {',
+    'String padSection(List log, long fromMs, long toMs, TimeZone tz) {',
 ]
 String IMPORTS = "import groovy.json.JsonOutput\nimport groovy.json.JsonSlurper\nimport java.text.SimpleDateFormat\n"
 def h = new GroovyShell().parse(IMPORTS + SIGNATURES.collect { extract(text, it) }.join("\n") + "\nreturn this\n").run()
@@ -139,6 +159,15 @@ check 'token and key', r2.tokenInReply == true && r2.keySent == true && r2.openE
 Map r3 = h.evalRemoteSocket([line('20:57:55.661', 'ws remote: status: open'), line('20:57:57.000', 'rx remote: {"event": "ms.channel.unauthorized"}')], [], utc)
 check 'refused: key not judged', r3.handshake == 'ms.channel.unauthorized' && !r3.containsKey('keySent')
 
+List<Map> three = []
+[['20:00:00.000', '20:00:01.500'], ['20:00:10.000', '20:00:11.458'], ['20:00:20.000', '20:00:26.618']].each { o, r ->
+    three << line(o, 'ws remote: status: open') << line(r, 'rx remote: {"data": {}, "event": "ms.channel.connect"}')
+}
+Map r4 = h.evalRemoteSocket(three, [], utc)
+check 'three connects: slowest and all', r4.connectMs == 6618L && r4.connectMsAll == [1500L, 1458L, 6618L] && r4.handshake == 'ms.channel.connect'
+check 'an open with no answer is skipped', h.evalRemoteSocket([line('1:00:00.000', 'ws remote: status: open')], [], utc).with { it.connectMs == null && it.connectMsAll == [] }
+check 'one connect keeps connectMs', r2.connectMsAll == [2047L]
+
 println 'evalBurst'
 List<Map> kb = [line('1:00:00.000', 'ws remote: status: open')] + (1..3).collect { line('1:00:01.000', 'tx remote: {"DataOfCmd":"KEY_HOME"}') }
 check 'one open, three keys', h.evalBurst(kb) == [opens: 1, keysSent: 3]
@@ -159,11 +188,106 @@ Map po3 = h.evalPowerOff([], evOff, [off: [ok: true, ms: 300L]], t0, utc, true)
 check 'already off: no offMs', po3.alreadyOff == true && !po3.containsKey('offMs')
 
 println 'evalPowerOn'
+long on0 = h.tsMs('2026-10-15 20:26:36.496', utc)
 Map pn = h.evalPowerOn([line('20:26:36.500', 'wol: sent'), line('20:26:46.500', 'wol: sent'),
                         line('20:26:56.726', 'rest: status=200 ms=40 PowerState=on keys=OS')],
-                       [[name: 'switch', value: 'on', at: 5L]], [on: [ok: true, ms: 20179L]],
-                       h.tsMs('2026-10-15 20:26:36.496', utc), utc)
+                       [[name: 'switch', value: 'on', at: on0 + 20179L]], [:], on0, utc)
 check 'on, sends, first answer', pn.onEvent && pn.onMs == 20179L && pn.wolSends == 2 && pn.firstAnswerMs == 20230L
+check 'an on event before the call is not this on', h.evalPowerOn([], [[name: 'switch', value: 'on', at: on0 - 1L]], [:], on0, utc).onEvent == false
+
+def rd = { long ms, String v -> [ms: ms, v: v] }
+List<Map> okReadings = [rd(0, 'none'), rd(5000, 'standby'), rd(10000, 'on'), rd(15000, 'on')]
+Map pr = h.evalPowerOn([], [[name: 'switch', value: 'on', at: on0 + 12000L]], [:], on0, utc, okReadings, 9000L, 60, 30000L)
+check 'REST on time, picture, readings text', pr.restOnMs == 10000L && pr.pictureMs == 9000L && pr.readings == '0s:none 5s:standby 10s:on 15s:on'
+check 'in step: neither lags', pr.powerStateLags == false && pr.switchLags == false
+Map pl = h.evalPowerOn([], [[name: 'switch', value: 'on', at: on0 + 12000L]], [:], on0, utc, [rd(0, 'standby'), rd(30000, 'on')], 5000L, 60, 40000L)
+check 'picture 25 s before REST: PowerState lags', pl.powerStateLags == true
+check 'picture 14.9 s before REST: not yet a lag', h.evalPowerOn([], [], [:], on0, utc, [rd(20000, 'on')], 5100L).powerStateLags == false
+check 'no picture answer: no lag judged', h.evalPowerOn([], [], [:], on0, utc, [rd(20000, 'on')], 'no answer').powerStateLags == false &&
+    h.evalPowerOn([], [], [:], on0, utc, [rd(20000, 'on')], 'never').powerStateLags == false
+check 'no question asked: no pictureMs field', !h.evalPowerOn([], [], [:], on0, utc, [rd(20000, 'on')]).containsKey('pictureMs')
+// REST said on at 10 s; the switch may take a poll (60 s) plus 10 s more: until 80 s.
+check 'switch on at 70 s: within the limit', h.evalPowerOn([], [[name: 'switch', value: 'on', at: on0 + 70000L]], [:], on0, utc, [rd(10000, 'on')], null, 60, 90000L).switchLags == false
+check 'switch on at 85 s: lags', h.evalPowerOn([], [[name: 'switch', value: 'on', at: on0 + 85000L]], [:], on0, utc, [rd(10000, 'on')], null, 60, 90000L).switchLags == true
+check 'no switch on after the limit: lags', h.evalPowerOn([], [], [:], on0, utc, [rd(10000, 'on')], null, 60, 120000L).switchLags == true
+check 'no switch on, watch ended before the limit: not judged', h.evalPowerOn([], [], [:], on0, utc, [rd(100000L, 'on')], null, 60, 120000L).switchLags == false
+check 'REST never on: switch not judged, restOnMs null', h.evalPowerOn([], [], [:], on0, utc, [rd(0, 'standby')], null, 60, 120000L).with { it.switchLags == false && it.containsKey('restOnMs') && it.restOnMs == null }
+check 'TV without PowerState: no restOnMs field', !h.evalPowerOn([], [[name: 'switch', value: 'on', at: on0 + 1000L]], [:], on0, utc, [rd(0, 'absent'), rd(5000, 'absent')]).containsKey('restOnMs')
+check 'differences: restOnMs over 45 s, driver lag',
+    h.differences([onEvent: true, restOnMs: 50000L, powerStateLags: false, switchLags: true],
+                  [onEvent: [eq: true, driver: true], restOnMs: [max: 45000, optional: true], powerStateLags: [eq: false], switchLags: [eq: false, driver: true]]) == ['restOnMs', 'switchLags']
+
+println 'pictureMs'
+check 'seconds from on()', h.pictureMs([choice: 'on', atMs: 5000L], 2000L) == 3000L
+check 'never, no answer, not asked', h.pictureMs([choice: 'never', atMs: 1L], 0L) == 'never' && h.pictureMs([choice: null], 0L) == 'no answer' && h.pictureMs(null, 0L) == null
+
+println 'readings'
+check 'value: no answer, PowerState, absent', h.readingValue([status: 'no answer']) == 'none' && h.readingValue([status: 200, device: [PowerState: 'Standby']]) == 'standby' &&
+    h.readingValue([status: 200, device: [OS: 'Tizen']]) == 'absent' && h.readingValue([status: 200]) == 'absent'
+Map sm = h.summarizeReadings([rd(0, 'on'), rd(5100, 'standby'), rd(9900, 'standby'), rd(15000, 'none'), rd(20000, 'none')])
+check 'summary: first standby, first none, last answer', sm.standbyS == 5 && sm.stoppedS == 15 && sm.lastAnswerS == 10 &&
+    sm.text == '0s:on 5s:standby 10s:standby 15s:none 20s:none' && sm.onMs == 0L
+check 'summary of nothing', h.summarizeReadings([]) == [text: '', standbyS: null, stoppedS: null, lastAnswerS: null, onMs: null]
+Map pr1 = h.evalPowerOff([], evOff, [off: [ok: true, ms: 1200L]], t0, utc, false, [rd(4000, 'standby'), rd(9000, 'none'), rd(14000, 'none')])
+check 'off with readings: standby then stopped', pr1.wentAway == 'REST stopped, PowerState standby' && pr1.restStandbyS == 4 && pr1.restStoppedS == 9 && pr1.restAfterOffS == 4L && pr1.readings == '4s:standby 9s:none 14s:none'
+check 'off with readings, never stopped', h.evalPowerOff([], evOff, [off: [ok: true, ms: 1L]], t0, utc, false, [rd(4000, 'on'), rd(9000, 'on')]).with { it.wentAway == 'still answering' && it.restStoppedS == null && it.restAfterOffS == 9L }
+
+println 'mac'
+check 'normalize', h.normalizeMac('f4:7b:09:12:34:56') == 'F47B09123456' && h.normalizeMac('F4-7B-09-12-34-56') == 'F47B09123456' && h.normalizeMac('F47B09123456') == 'F47B09123456'
+check 'normalize refuses', h.normalizeMac(null) == null && h.normalizeMac('') == null && h.normalizeMac('f4:7b:09') == null && h.normalizeMac('zz:7b:09:12:34:56') == null
+check 'match across notations', h.macsMatch('F47B09123456', 'f4:7b:09:12:34:56')
+check 'mismatch or missing is false', !h.macsMatch('F47B09123456', 'f4:7b:09:12:34:57') && !h.macsMatch(null, null) && !h.macsMatch('F47B09123456', null)
+
+println 'needsAllow'
+check 'no token', h.needsAllow('true', null) && h.needsAllow('true', '') && h.needsAllow('true', '12345678')
+check 'has a token, or no token auth', !h.needsAllow('true', '87654321') && !h.needsAllow('false', null) && !h.needsAllow(null, null)
+
+println 'prompts'
+Map pp = h.newPrompt('picture', 'p7', 10, 1000L, 120)
+check 'picture prompt', pp.id == 'p7' && pp.test == 10 && pp.text == 'Click when the picture is on.' && pp.deadlineMs == 121000L && (pp.choices*.id) == ['on', 'never'] && pp.answer == null
+check 'every kind has a spec', ['allow', 'picture', 'art', 'app', 'airplay', 'home', 'screenOff'].every { h.promptSpec(it).choices }
+check 'open, expired', h.promptOutcome(pp, 120999L) == 'open' && h.promptOutcome(pp, 121000L) == 'expired'
+Map ans = h.answerPrompt(pp, 'p7', 'on', 5000L)
+check 'answer stored', ans.ok && ans.prompt.answer == [choice: 'on', atMs: 5000L] && h.promptOutcome(ans.prompt, 6000L) == 'answered'
+check 'stale id', h.answerPrompt(pp, 'p6', 'on', 5000L) == [ok: false, error: 'stale prompt'] && h.answerPrompt(null, 'p7', 'on', 5000L) == [ok: false, error: 'stale prompt']
+check 'second answer is stale', h.answerPrompt(ans.prompt, 'p7', 'never', 6000L).error == 'stale prompt'
+check 'answer after the deadline is stale', h.answerPrompt(pp, 'p7', 'on', 121000L).error == 'stale prompt'
+check 'unknown choice', h.answerPrompt(pp, 'p7', 'maybe', 5000L).error == 'unknown choice'
+check 'page sees open prompts only, without the answer', h.publicPrompt(pp, 5000L).keySet().containsAll(['id', 'test', 'kind', 'text', 'choices', 'askedAtMs', 'deadlineMs']) &&
+    !h.publicPrompt(pp, 5000L).containsKey('answer') && h.publicPrompt(ans.prompt, 6000L) == null && h.publicPrompt(pp, 200000L) == null && h.publicPrompt(null, 1L) == null
+check 'fields: art, app, airplay, allow',
+    h.promptFields(7, [art: [choice: 'art']]) == [artSeen: 'yes'] && h.promptFields(7, [art: [choice: 'noart']]) == [artSeen: 'no'] &&
+    h.promptFields(4, [app: [choice: 'opened']]) == [appSeen: 'yes'] && h.promptFields(4, [app: [choice: null]]) == [appSeen: 'no answer'] &&
+    h.promptFields(6, [airplay: [choice: 'unknown']]) == [airplayOn: 'unknown'] && h.promptFields(2, [allow: [choice: 'done']]) == [allowPrompt: 'done']
+check 'fields: not asked', h.promptFields(6, [:]) == [:] && h.promptFields(10, [picture: [choice: 'on']]) == [:]
+
+check 'home prompt', h.promptSpec('home').text == 'Did the TV go to its home screen?' && (h.promptSpec('home').choices*.id) == ['yes', 'no'] &&
+    (h.promptSpec('home').choices*.label) == ['Home screen showed', 'Nothing happened']
+check 'screenOff prompt: art only on a Frame', (h.promptSpec('screenOff').choices*.id) == ['off', 'on'] && (h.promptSpec('screenOff', true).choices*.id) == ['off', 'on', 'art'] &&
+    (h.promptSpec('screenOff', true).choices*.label) == ['Screen went off', 'Still on', 'Shows art'] && h.promptSpec('screenOff').text == 'Did the screen go off?'
+check 'newPrompt carries the Frame flag', (h.newPrompt('screenOff', 'p9', 4, 0L, 30, true).choices*.id).contains('art') && !(h.newPrompt('screenOff', 'p9', 4, 0L, 30).choices*.id).contains('art') &&
+    h.newPrompt('screenOff', 'p9', 4, 1000L, 30).deadlineMs == 31000L
+check 'fields: home, screenOff',
+    h.promptFields(2, [home: [choice: 'yes']]) == [homeSeen: 'yes'] && h.promptFields(2, [home: [choice: 'no']]) == [homeSeen: 'no'] && h.promptFields(2, [home: [choice: null]]) == [homeSeen: 'no answer'] &&
+    h.promptFields(2, [allow: [choice: 'done'], home: [choice: 'yes']]) == [allowPrompt: 'done', homeSeen: 'yes'] &&
+    h.promptFields(8, [screenOff: [choice: 'off']]) == [screenOff: 'off'] && h.promptFields(8, [screenOff: [choice: 'on']]) == [screenOff: 'on'] &&
+    h.promptFields(8, [screenOff: [choice: 'art']]) == [screenOff: 'art'] && h.promptFields(8, [screenOff: [choice: null]]) == [screenOff: 'no answer']
+check 'fields: not asked when nobody was there',
+    h.promptFields(2, [allow: [notAsked: true], home: [notAsked: true]]) == [allowPrompt: 'not asked', homeSeen: 'not asked'] &&
+    h.promptFields(8, [screenOff: [notAsked: true]]) == [screenOff: 'not asked'] && h.promptFields(7, [art: [notAsked: true]]) == [artSeen: 'not asked'] &&
+    h.promptFields(4, [app: [notAsked: true]]) == [appSeen: 'not asked'] && h.promptFields(6, [airplay: [notAsked: true]]) == [airplayOn: 'not asked']
+check 'pictureMs not asked', h.pictureMs([notAsked: true], 0L) == 'not asked'
+
+println 'statusRun'
+Map sr = h.statusRun([status: 'running', startedAt: 99L, tests: [0, 1, 10], idx: 2, step: 0,
+                      results: [[test: 1, diffs: [], driverDiffs: [], tvDiffs: []]],
+                      cur: [test: 10, step: 'watch', label: 'Waiting for the TV to report on', startedAtMs: 100L, deadlineMs: 120100L]], [1: 'Device info', 10: 'Power on'])
+check 'rows with the step label', sr.rows*.state == ['ok', 'running'] && sr.rows[1].detail == 'Waiting for the TV to report on' && sr.startedAtMs == 99L
+check 'current step', sr.current == [test: 10, name: 'Power on', step: 'watch', label: 'Waiting for the TV to report on', startedAtMs: 100L, deadlineMs: 120100L]
+Map sr2 = h.statusRun([status: 'running', tests: [0, 1], idx: 1, step: 0, results: [], cur: [test: 0, step: 'poll', label: 'old']], [1: 'Device info'])
+check 'a step of the previous test is not current', sr2.current.label == 'Starting' && sr2.current.deadlineMs == null && sr2.rows[0].detail == 'step 1'
+check 'finished run has no current step', h.statusRun([status: 'done', tests: [0, 1], idx: 2, results: []], [:]).current == null
+check 'no run', h.statusRun(null, [:]) == [status: null, reason: null, startedAtMs: null, rows: [], current: null]
 
 println 'evalStandby'
 check 'timeout reply, stayed off', h.evalStandby([line('20:31:41.326', 'rx remote: {"event": "ms.channel.timeOut"}')], []) ==
@@ -223,8 +347,8 @@ check 'differences follow it', h.differences([result: 'none'], h.discoveryExpect
 
 println 'discovery in the report'
 check 'name masked in the trace', h.traceLines([line('1:00:00.000', mline)]) == ['1:00:00.000 mdns: name=<name> ip=<ip> manufacturer=Samsung model=UMOCK keys=deviceid,manufacturer,model,serialNumber']
-check 'mock profile gets airplay model', h.profileFields([[test: 10, observed: [result: 'found', model: 'UMOCK', keys: 'a']]]) == [airplay: [model: 'UMOCK'], otherMessages: '']
-check 'no airplay when not found', h.profileFields([[test: 10, observed: [result: 'none', model: null, keys: null]]]) == [:]
+check 'mock profile gets airplay model', h.profileFields([[test: 6, observed: [result: 'found', model: 'UMOCK', keys: 'a']]]) == [airplay: [model: 'UMOCK'], otherMessages: '']
+check 'no airplay when not found', h.profileFields([[test: 6, observed: [result: 'none', model: null, keys: null]]]) == [:]
 
 println 'deviceInfoFields'
 Map fi = h.deviceInfoFields([device: [OS: 'Tizen', duid: 'uuid:x', wifiMac: 'f4:7b:09:12:34:56', PowerState: 'on'], version: '2.0.25',
@@ -262,6 +386,8 @@ check 'verdict driver', h.verdictOf([diffs: diffs] + split) == 'driver'
 check 'verdict text', h.verdictText([diffs: diffs] + split) == 'driver differs (b); TV differs (a, c)'
 check 'skipped', h.verdictText([skipped: 'not a Frame TV']) == 'skipped: not a Frame TV'
 check 'as expected', h.verdictText([diffs: [], driverDiffs: [], tvDiffs: []]) == 'as expected'
+check 'discovery heard another device', h.verdictText([test: 6, observed: [result: 'other'], diffs: ['result'], driverDiffs: [], tvDiffs: ['result']]) ==
+    "TV differs (result); a Samsung device that isn't this TV answered"
 
 println 'testRows'
 List<Map> rows = h.testRows([status: 'running', tests: [0, 1, 2, 3], idx: 2, step: 1,
@@ -276,20 +402,57 @@ println 'formatReport'
 String rep = h.formatReport([appVersion: '0.1.0', driverVersion: '2.4.2', firmware: '2.5.2.135', modelName: 'UN50TU7000FXZC',
                              platform: '20_KANTSU2_UHD_BASIC', apiVersion: '2.0.25', frameTv: 'false', tokenSupport: 'true',
                              powerStateReported: 'true', smartThings: false, pollS: 60, slowestReadMs: 120, status: 'done'],
-                            [[test: 9, name: 'App list', observed: [answered: false, apps: null], diffs: ['answered'], driverDiffs: [], tvDiffs: ['answered'],
+                            [[test: 5, name: 'App list', observed: [answered: false, apps: null], diffs: ['answered'], driverDiffs: [], tvDiffs: ['answered'],
                               trace: ['20:58:00.000 tx remote: {}']]])
+check 'setup line', rep.contains('TV settings: Power On with Mobile unknown · IP Remote unknown') &&
+    h.formatReport([appVersion: '0.4.0', status: 'done', powerOnWithMobile: 'yes', ipRemote: 'no'], []).contains('TV settings: Power On with Mobile yes · IP Remote no')
+check 'questions on by default, off when unattended', rep.contains('IP Remote unknown · questions on') &&
+    h.formatReport([appVersion: '0.4.0', status: 'done', attended: 'yes'], []).contains('· questions on') &&
+    h.formatReport([appVersion: '0.4.0', status: 'done', attended: 'no'], []).contains('IP Remote unknown · questions off')
 check 'header', rep.contains('TV: UN50TU7000FXZC · platform 20_KANTSU2_UHD_BASIC') && rep.contains('SmartThings setting off')
-check 'test line and trace', rep.contains('9. App list — TV differs (answered)') && rep.contains('     20:58:00.000 tx remote: {}')
+check 'test line and trace', rep.contains('5. App list — TV differs (answered)') && rep.contains('     20:58:00.000 tx remote: {}')
 
 println 'profileFields'
 Map pf = h.profileFields([[test: 1, observed: [deviceInfo: [OS: 'Tizen'], apiVersion: '2.0.25', restMs: 20]],
                           [test: 2, observed: [handshake: 'ms.channel.connect', connectMs: 1352, otherMessages: 'ms.error']],
                           [test: 7, skipped: 'not a Frame TV'],
-                          [test: 9, observed: [answered: false, apps: null, otherMessages: 'ms.error,ed.edenTV.update']]])
+                          [test: 5, observed: [answered: false, apps: null, otherMessages: 'ms.error,ed.edenTV.update']]])
 check 'profile keys only, otherMessages merged', pf == [deviceInfo: [OS: 'Tizen'], apiVersion: '2.0.25', handshake: 'ms.channel.connect',
     connectMs: 1352, answered: false, apps: null, otherMessages: 'ms.error,ed.edenTV.update']
 String rep2 = h.formatReport([appVersion: '0.2.0', status: 'done'], [[test: 1, name: 'Device info', observed: [deviceInfo: [OS: 'Tizen']], diffs: []]])
 check 'maps as JSON, profile block', rep2.contains('deviceInfo={"OS":"Tizen"}') && rep2.contains('mock profile (for the maintainer):') && rep2.contains('"OS": "Tizen"')
+
+println 'padCommand'
+check 'a driver command passes by its name', h.padCommand('channelUp') == [ok: true, method: 'channelUp', args: []] && h.padCommand('Return').method == 'Return' && h.padCommand('on').ok
+check 'the id is case-sensitive and must be listed', !h.padCommand('CHANNELUP').ok && !h.padCommand('HOME').ok && !h.padCommand(null).ok && !h.padCommand('').ok && !h.padCommand('deviceRefresh').ok && !h.padCommand('sendKey ').ok
+check 'sendKey upper-cases and drops a leading KEY_', h.padCommand('sendKey', 'KEY_info') == [ok: true, method: 'sendKey', args: [[type: 'STRING', value: 'INFO']]] && h.padCommand('sendKey', 'vol_up').args[0].value == 'VOL_UP'
+check 'sendKey refuses odd names', ['', 'KEY_', null, 'A B', 'A;B', 'A-B', 'A' * 31, 'A\n'].every { !h.padCommand('sendKey', it).ok } && h.padCommand('sendKey', 'A' * 30).ok && h.padCommand('sendKey', 'x y').error == 'unknown key'
+
+println 'pad log'
+check 'append keeps the order', h.padLogAppend([[atMs: 1L]], [atMs: 2L], 50)*.atMs == [1L, 2L] && h.padLogAppend(null, [atMs: 1L], 50)*.atMs == [1L]
+List<Map> big = (1..50).collect { [atMs: (long) it] }
+check 'append drops the oldest beyond the cap', h.padLogAppend(big, [atMs: 51L], 50).with { it.size() == 50 && it[0].atMs == 2L && it[-1].atMs == 51L } && h.padLogAppend(big.take(10), [atMs: 99L], 50).size() == 11
+check 'a run restores the value from before the pad', h.runStartTrace([active: true, prev: false], true) == false && h.runStartTrace([active: true, prev: true], true) == true &&
+    h.runStartTrace(null, true) == true && h.runStartTrace([:], false) == false && h.runStartTrace(null, null) == false
+List<Map> pl1 = [line('3:00:00.100', 'tx remote: {"DataOfCmd":"KEY_HOME"}'), line('3:00:00.200', 'setPowerState: [switch: on]', 'info'),
+                 line('3:00:03.900', 'rest: status=200 ms=30 PowerState=on keys=A,B', 'trace'), line('3:00:04.500', 'ws remote: failure: x 192.0.2.10', 'warn')]
+check 'entry lines: trace/warn/error only, before the cut-off, masked', h.padEntryLines(pl1, '2026-10-15 3:00:04.000') ==
+    ['3:00:00.100 tx remote: {"DataOfCmd":"KEY_HOME"}', '3:00:03.900 rest: status=200 ms=30 PowerState=on'] &&
+    h.padEntryLines(pl1, '2026-10-15 3:00:09.000')[-1] == '3:00:04.500 ws remote: failure: x <ip>'
+check 'entry lines: cut to 15 lines, and by size', h.padEntryLines((1..30).collect { line("3:00:${10 + it}.000", 'tx remote: x') }, '2027').size() == 15 &&
+    h.padEntryLines((1..30).collect { line("3:00:${10 + it}.000", 'tx remote: ' + ('y' * 400)) }, '2027').with { it.size() <= 10 && it.every { s -> s.length() <= 200 } } &&
+    h.padEntryLines((1..30).collect { line("3:00:${10 + it}.000", 'tx remote: x') }, '2027', 4).size() == 4
+List<Map> plog = [[atMs: 1000L, since: 's', button: 'home', key: null, lines: ['a']], [atMs: 2000L, since: 's', button: 'sendKey', key: 'KEY_INFO', lines: []],
+                  [atMs: 3000L, since: 's', button: 'mute', key: null]]
+check 'view: last n, the page fields only, newest last', h.padLogView(plog, 2)*.atMs == [2000L, 3000L] && h.padLogView(plog, 20).size() == 3 &&
+    h.padLogView(plog, 20)[2] == [atMs: 3000L, button: 'mute', key: null, lines: []] && !h.padLogView(plog, 20)[0].containsKey('since') && h.padLogView(null, 20) == []
+check 'entry text: time, button, key, indented lines', h.padEntryText(plog[0], utc) == '00:00:01 home\n   a' && h.padEntryText(plog[1], utc) == '00:00:02 sendKey KEY_INFO'
+check 'manual keys section: presses after the previous report up to this one', h.padSection(plog, 1000L, 2000L, utc) == 'Manual keys (remote pad presses since the previous report)\n00:00:02 sendKey KEY_INFO' &&
+    h.padSection(plog, 0L, 5000L, utc).split('\n').size() == 5 && h.padSection(plog, 0L, 5000L, utc).contains('00:00:01 home\n   a')
+check 'no section without presses', h.padSection(plog, 3000L, 9000L, utc) == '' && h.padSection(null, 0L, 9L, utc) == '' && h.padSection([], 0L, 9L, utc) == ''
+String repPad = h.formatReport([appVersion: '0.4.0', status: 'done', manualKeys: h.padSection(plog, 0L, 5000L, utc)], [[test: 1, name: 'Device info', observed: [deviceInfo: [OS: 'Tizen']], diffs: []]])
+check 'report: section after the tests, before the profile', repPad.indexOf('1. Device info') < repPad.indexOf('Manual keys (remote pad') && repPad.indexOf('Manual keys (remote pad') < repPad.indexOf('mock profile (for the maintainer):')
+check 'report: no section when no keys', !h.formatReport([appVersion: '0.4.0', status: 'done', manualKeys: ''], []).contains('Manual keys') && !h.formatReport([appVersion: '0.4.0', status: 'done'], []).contains('Manual keys')
 
 println 'pollGap'
 check 'short wait: 1 s', h.pollGap(15, 400L) == 1
