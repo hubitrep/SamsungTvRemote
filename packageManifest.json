@@ -14,7 +14,7 @@
       "namespace": "davegut",
       "location": "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVRemote.groovy",
       "required": true,
-      "version": "2.4.10"
+      "version": "2.4.11"
     }
   ],
   "apps": [

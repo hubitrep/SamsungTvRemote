@@ -2189,7 +2189,7 @@ def setTvChannel(newChannel) {
 
 // ===== Logging =====
 
-def version() { return "2.4.10" }
+def version() { return "2.4.11" }
 
 def label() { return device.displayName + "-${version()}" }
 

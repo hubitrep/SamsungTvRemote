@@ -347,7 +347,7 @@ void pushToTvs() {
                 logDebug "${tv.displayName}: new key sent"
             }
         } else if (setup || newKey) {
-            // First link, a changed setting, or a driver before 2.4.10: only configure() makes it take them up.
+            // First link, a changed setting, or a driver before 2.4.11: only configure() makes it take them up.
             if (newKey) tv.updateSetting("stApiKey", [type: "string", value: token])
             tv.configure()
             logDebug "${tv.displayName}: SmartThings settings filled, configure() sent"
