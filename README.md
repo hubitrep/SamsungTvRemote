@@ -48,6 +48,104 @@ working and nothing has to be recreated.
 
 Each TV device updates itself at its next power poll; its settings are kept.
 
+## SmartThings
+
+The driver's SmartThings connection adds picture and sound modes, input source, the playing app and
+channel data. It needs a SmartThings key. A personal access token works for 24 hours only, and from
+December 15, 2026 SmartThings ends API access for accounts without a paid API plan.
+
+With the SmartThings **Developer Plan**, the optional **Samsung TV SmartThings Link** app keeps the
+key fresh. The TVs stay the devices they are; the app fills in their SmartThings settings and renews
+the key about every 11 hours. The plan is sold in the US, Korea, Belgium, France, Germany, Italy, the
+Netherlands, Poland and the UK (see SmartThings'
+[API plans](https://developers.smartthingsgdev.com/smartthingsapi)).
+
+Before you start: each TV already works in Hubitat with this driver (its IP address is set), and
+each TV is in your SmartThings app.
+
+### Step 1: Subscribe to the Developer Plan
+
+1. Open the [SmartThings API plans](https://developers.smartthingsgdev.com/smartthingsapi) page and
+   click **Get Started** under **Developer**.
+2. Sign in with the Samsung account that holds your TVs in SmartThings, and subscribe.
+
+### Step 2: Register an API Access App in SmartThings
+
+1. In the [Developer Center console](https://developer.smartthings.com/console), click
+   **Service Integrations**, then **Get Started**.
+2. Fill in the form:
+
+   | Field | Enter |
+   |---|---|
+   | App Display Name | any name, for example `Hubitat Samsung TV` (SmartThings shows it when you sign in) |
+   | Redirect URIs | `https://cloud.hubitat.com/oauth/stateredirect` |
+   | Target URL | leave blank |
+   | OAuth scopes | `r:devices:*` and `x:devices:*` |
+
+3. Finish the registration. SmartThings then gives the app's **App ID**, **Client ID** and **Client Secret**. Copy the
+   client ID and client secret somewhere safe for Step 4.
+
+SmartThings' own instructions: [API Access App Setup](https://developer.smartthings.com/docs/service-integrations/app-setup).
+If you have screenshots of these screens, please share them in the support thread.
+
+### Step 3: Install Samsung TV SmartThings Link
+
+- **With HPM:** **Modify** → "Samsung TV Remote (hubitrep)" → tick **Samsung TV SmartThings Link**.
+- **By hand:** **Apps Code** → **New App** → **Import**, with
+  `https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVSmartThingsLink.groovy`,
+  then **Save**.
+
+Then **Apps** → **Add User App** → **Samsung TV SmartThings Link**. The app turns on OAuth for
+itself; if its page says it could not, follow the steps it shows.
+
+![The app's page before setup](Docs/images/smartthings-link-1-new.png)
+
+### Step 4: Enter the client ID and secret
+
+Paste the **Client ID** and the **Client Secret** from Step 2, pressing Enter after each. The secret
+is stored encrypted and the field empties; its title then says it is saved.
+
+![Client ID entered, secret saved, the sign-in link](Docs/images/smartthings-link-2-sign-in.png)
+
+### Step 5: Sign in to SmartThings
+
+1. Click **Sign in to SmartThings**. A new tab opens on SmartThings.
+2. Sign in with the same Samsung account and allow access. If SmartThings asks which location or
+   devices to allow, choose the ones with your TVs.
+3. The tab ends on a page that says **Signed in to SmartThings**. Close it, go back to the app's
+   tab and reload the page. Under **2. Sign in** it now says when the key was renewed.
+
+### Step 6: Pick your TVs
+
+1. Under **3. TVs**, pick your Samsung TV Remote devices.
+2. With several TVs on the SmartThings account, a **SmartThings TV for …** list appears under each
+   TV: pick the matching one. Left blank, the driver looks the TV up itself.
+3. Click **Done**.
+
+![Signed in, one TV linked and paired](Docs/images/smartthings-link-3-linked.png)
+
+The page says how many TVs are linked. A TV without an IP address is listed as **not linked yet**:
+set it up in the driver, then open the app and click **Done** again.
+
+### Check that it works
+
+Open the TV's device page, **Preferences**: **Connect to SmartThings** is on and the
+**SmartThings API Key** and **SmartThings Device ID** fields are filled. The key changes with each
+renewal; leave these fields to the app.
+
+![The TV's SmartThings preferences, filled by the app](Docs/images/smartthings-link-4-tv-settings.png)
+
+### Later
+
+- **Refresh the key now** renews the key at once; the app also does it on its own.
+- If SmartThings ends the session (for example after the hub was off for a long time), the page
+  says **Signed out by SmartThings**: click **Sign in again**.
+- **Sign out and remove the key from the TVs** turns off the TVs' SmartThings connection.
+- A TV taken out of the app's list keeps its key until it expires, within 24 hours.
+
+The plan allows 100,000 calls a month. Each TV's SmartThings poll uses about 2,900 a month at the
+default 15 minutes, or 43,200 at 1 minute; the TV's power polling is local and uses none.
+
 ## Tester
 
 The optional **Samsung TV Remote Tester** app runs the driver through a set of tests on your TV and

@@ -19,6 +19,16 @@
   ],
   "apps": [
     {
+      "id": "5e010af3-cbed-41be-a97b-23eedc93e704",
+      "name": "Samsung TV SmartThings Link",
+      "namespace": "hubitrep",
+      "location": "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVSmartThingsLink.groovy",
+      "required": false,
+      "oauth": true,
+      "primary": false,
+      "version": "0.1.0"
+    },
+    {
       "id": "7b47edcf-b9be-4e62-abdb-42cae0e75229",
       "name": "Samsung TV Remote Tester",
       "namespace": "hubitrep",

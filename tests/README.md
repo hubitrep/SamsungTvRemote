@@ -129,3 +129,20 @@ back the same report, timings aside.
 | `nopowerstate.json` | no `PowerState`, REST answers in standby | constructed |
 | `notoken.json` | no token auth, plain `ws` on 8001 | constructed |
 | `refused.json` | the allow dialog refused | constructed |
+
+## Mock SmartThings
+
+`mocksmartthings.py` stands in for SmartThings so **Samsung TV SmartThings Link** can be tested
+without a SmartThings API plan. It serves the OAuth authorize and token endpoints and the device list,
+with SmartThings' rules: single-use codes and refresh tokens, the old access token refused once a
+refresh succeeds, `400 invalid_grant` for anything else. The account holds one TV and one non-TV device.
+
+```bash
+python3 tests/mocksmartthings.py --client-id test-client --client-secret test-secret --port 8099
+```
+
+In the app, enter those client values and, under **Advanced**, the mock's address
+(`http://<host>:8099`), then sign in: the mock redirects through Hubitat's cloud back to the app.
+`--expires-in` shortens the token life, `--deny` makes sign-in fail, `--second-tv` adds a second TV, `POST /mock/revoke` ends the
+session, and `GET /mock/state` shows what was called. The driver still calls the real SmartThings,
+which refuses the mock's tokens with HTTP 401.
