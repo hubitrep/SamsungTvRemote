@@ -5,9 +5,9 @@
 without a SmartThings API plan.
 
 Serves what the app calls, with SmartThings' documented rules:
-  GET  /v1/oauth/authorize  checks client_id and redirect_uri, then redirects to redirect_uri with
+  GET  /oauth/authorize  checks client_id and redirect_uri, then redirects to redirect_uri with
                             code and state (or error=access_denied with --deny)
-  POST /v1/oauth/token      HTTP Basic client auth; authorization_code (single-use code, same
+  POST /oauth/token      HTTP Basic client auth; authorization_code (single-use code, same
                             redirect_uri) or refresh_token (single-use; the old access token stops
                             working at once); otherwise 400 {"error": "invalid_grant"}
   GET  /v1/devices          Bearer token; one TV (OCF, "Samsung OCF TV") and one non-TV device
@@ -78,7 +78,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
-        if u.path == "/v1/oauth/authorize":
+        if u.path == "/oauth/authorize":
             if q.get("client_id") != ARGS.client_id:
                 note("authorize: unknown client_id")
                 return self.send(400, {"error": "invalid_client"})
@@ -122,7 +122,7 @@ class H(BaseHTTPRequestHandler):
                 S["refresh"] = {}
             note("mock: refresh token revoked")
             return self.send(200, {"ok": True})
-        if u.path != "/v1/oauth/token":
+        if u.path != "/oauth/token":
             return self.send(404, {"error": "not found"})
         auth = self.headers.get("Authorization") or ""
         try:

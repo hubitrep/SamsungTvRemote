@@ -162,7 +162,7 @@ String apiBase() {
 String authorizeUrl() {
     if (!state.oauthNonce) state.oauthNonce = UUID.randomUUID().toString()
     String back = "${getHubUID()}/apps/${app.id}/oauth/callback?access_token=${hubToken()}&nonce=${state.oauthNonce}"
-    return "${apiBase()}/v1/oauth/authorize?client_id=${enc(clientId)}&response_type=code" +
+    return "${apiBase()}/oauth/authorize?client_id=${enc(clientId)}&response_type=code" +
         "&scope=${enc(SCOPES.join(' '))}&redirect_uri=${enc(REDIRECT_URI)}&state=${enc(back)}"
 }
 
@@ -235,7 +235,7 @@ private Map tokenPost(Map form) {
     form.client_id = clientId
     Map params = [
         uri: apiBase(),
-        path: "/v1/oauth/token",
+        path: "/oauth/token",
         requestContentType: "application/x-www-form-urlencoded",
         headers: [Authorization: "Basic " + "${clientId}:${secretValue}".bytes.encodeBase64().toString(), Accept: "application/json"],
         body: form,
