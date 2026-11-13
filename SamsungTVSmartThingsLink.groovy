@@ -124,6 +124,7 @@ void initialize() {
         schedule("${r.nextInt(60)} ${r.nextInt(60)} */3 * * ?", "tokenCheck")
         subscribe(location, "systemStart", "hubStarted")
     }
+    ["configuredWith", "rejectWarned"].each { state.remove(it) }   // kept by 0.1.0
     if (logEnable) runIn(1800, "debugLogOff")
     // TVs taken out of the list are no longer kept fresh; their key expires within 24 hours.
     List<String> picked = (tvs ?: []).collect { it.id as String }
@@ -279,7 +280,6 @@ private void storeTokens(Map d) {
     state.scope = d.scope
     state.remove("needsLogin")
     state.remove("lastError")
-    state.remove("rejectWarned")
     logDebug "Token stored: expires in ${life} s, scope ${d.scope}"
 }
 
@@ -321,8 +321,6 @@ void pushToTvs() {
     if (!token || state.needsLogin || !tvs) return
     List<String> linked = (state.linked ?: []).collect { it as String }
     Map stTvs = state.stTvs ?: [:]
-    // Device id -> tag of the token in force when configure() was last sent to it.
-    Map configured = (state.configuredWith ?: [:]).collectEntries { k, v -> [(k as String): v] }
     List<String> notReady = []
     tvs.each { tv ->
         String id = tv.id as String
@@ -331,38 +329,27 @@ void pushToTvs() {
             linked.remove(id)
             return
         }
-        boolean reconfigure = !(id in linked)
+        boolean setup = !(id in linked)
         if (tv.getSetting("connectST") != true) {
             tv.updateSetting("connectST", [type: "bool", value: true])
-            reconfigure = true
-        }
-        if (tv.getSetting("stApiKey") != token) {
-            tv.updateSetting("stApiKey", [type: "string", value: token])
+            setup = true
         }
         String pick = settings["stTv_${id}"] ?: (stTvs.size() == 1 && tvs.size() == 1 ? stTvs.keySet().first() : null)
         if (pick && tv.getSetting("stDeviceId") != pick) {
             tv.updateSetting("stDeviceId", [type: "string", value: pick])
-            reconfigure = true
+            setup = true
         }
-        // A 401 the driver got (an outage outlasted the token, or a request raced a refresh) turns its
-        // SmartThings functions off until configure() runs its stUpdate. Once per token: a key
-        // SmartThings rejects as soon as it is issued would otherwise restart the TV on every check.
-        String tokenTag = Integer.toHexString(token.hashCode())
-        if (!reconfigure && driverAuthFailed(id)) {
-            if (configured[id] == tokenTag) {
-                if (!(id in (state.rejectWarned ?: []))) {
-                    logWarn "${tv.displayName}: SmartThings rejected the current key. Check that the API Access App has " +
-                        "the scopes ${SCOPES.join(' ')} and that the TV is on this SmartThings account."
-                    state.rejectWarned = (state.rejectWarned ?: []) + [id]
-                }
-            } else {
-                logInfo "${tv.displayName}: the driver had stopped after a rejected key; restarting its SmartThings functions"
-                reconfigure = true
+        boolean newKey = tv.getSetting("stApiKey") != token
+        if (!setup && tv.hasCommand("setSmartThingsKey")) {
+            // The driver stores the key, and restarts its SmartThings functions itself if a rejected key had stopped them.
+            if (newKey) {
+                tv.setSmartThingsKey(token)
+                logDebug "${tv.displayName}: new key sent"
             }
-        }
-        if (reconfigure) {
+        } else if (setup || newKey) {
+            // First link, a changed setting, or a driver before 2.4.10: only configure() makes it take them up.
+            if (newKey) tv.updateSetting("stApiKey", [type: "string", value: token])
             tv.configure()
-            configured[id] = tokenTag
             logDebug "${tv.displayName}: SmartThings settings filled, configure() sent"
         }
         if (!(id in linked)) {
@@ -371,7 +358,6 @@ void pushToTvs() {
         }
     }
     state.linked = linked
-    state.configuredWith = configured.findAll { k, v -> k in linked }
     if (notReady != (state.notReady ?: [])) {
         if (notReady) logWarn "Not linked yet: ${notReady.join(', ')}. Set up the TV in the driver first (its IP address), then open this app and click Done."
         state.notReady = notReady
@@ -393,20 +379,6 @@ void verifyTvs() {
         state.linked = (state.linked ?: []) - (tvs.findAll { it.displayName in missing }.collect { it.id as String })
     }
     state.notStored = missing
-}
-
-// Reads the driver's state.stAuthFailed over loopback; DeviceWrapper exposes no driver state.
-private boolean driverAuthFailed(String id) {
-    boolean failed = false
-    try {
-        httpGet([uri: "http://127.0.0.1:8080", path: "/device/fullJson/${id}", timeout: 15]) { resp ->
-            def ds = resp.data?.deviceState
-            failed = ds instanceof Map ? (ds.stAuthFailed == true) : (ds?.toString()?.contains('"stAuthFailed":true') ?: false)
-        }
-    } catch (Exception e) {
-        logDebug "Could not read device ${id}'s state: ${e.message}"
-    }
-    return failed
 }
 
 // Removes the key from the picked TVs and turns their SmartThings link off.

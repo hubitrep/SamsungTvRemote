@@ -36,6 +36,8 @@ List<String> SIGNATURES = [
     'boolean repairWanted(String switchValue, Long lastSearch, long nowMs) {',
     'String mdnsTraceLine(Map r) {',
     'String redact(String s, boolean names = true) {',
+    'String stKeyTag(String key) {',
+    'boolean keyReplaced(String sentTag, String currentTag) {',
 ]
 def h = new GroovyShell().parse(SIGNATURES.collect { extract(text, it) }.join("\n") + "\nreturn this\n").run()
 
@@ -101,6 +103,15 @@ check 'uuid', h.redact('"id":"e263b65-88ad-409f-8842-1be9a727a347"') == '"id":"<
 check 'mac', h.redact('"mac":"f4:7b:09:12:34:56"') == '"mac":"<mac>"'
 check 'names kept when asked', h.redact('{"name":"Movie","id":"e263b65-88ad-409f-8842-1be9a727a347"}', false) == '{"name":"Movie","id":"<id>"}'
 check 'values kept', h.redact('{"pictureMode":{"value":"AI Optimized"},"volume":21}') == '{"pictureMode":{"value":"AI Optimized"},"volume":21}'
+
+println 'stKeyTag / keyReplaced'
+check 'tag ignores spaces', h.stKeyTag(" abc ") == h.stKeyTag("abc") && h.stKeyTag("abc") != h.stKeyTag("abd")
+check 'tag is not the key', !h.stKeyTag("abc").contains("abc")
+check 'no key, no tag', h.stKeyTag(null) == "" && h.stKeyTag("  ") == ""
+check 'reply for the current key counts', !h.keyReplaced(h.stKeyTag("abc"), h.stKeyTag("abc"))
+check 'reply for a replaced key ignored', h.keyReplaced(h.stKeyTag("abc"), h.stKeyTag("abd"))
+check 'reply without a tag counts', !h.keyReplaced(null, h.stKeyTag("abc"))
+check 'key removed since', h.keyReplaced(h.stKeyTag("abc"), h.stKeyTag(null))
 
 println "\n${pass} passed, ${fail} failed"
 System.exit(fail ? 1 : 0)

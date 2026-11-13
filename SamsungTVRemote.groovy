@@ -1756,12 +1756,49 @@ def stConnected() {
 }
 
 //	SmartThings personal access tokens created after 30 Dec 2024 expire after 24 hours
-def stAuthFailed() {
+def stAuthFailed(String sentTag = null) {
+	if (keyReplaced(sentTag, stKeyTag(stApiKey))) {
+		logDebug("stAuthFailed: HTTP 401 for a key since replaced, ignored")
+		return
+	}
 	if (!state.stAuthFailed) {
 		state.stAuthFailed = true
 		unschedule("refresh")
 		logError("SmartThings rejected the API key (HTTP 401). Tokens created after 30 Dec 2024 " +
 				 "expire after 24 hours. SmartThings functions are off until a new key is saved.")
+	}
+}
+
+//	identifies a key in callback data without carrying the key
+String stKeyTag(String key) {
+	return key?.trim() ? Integer.toHexString(key.trim().hashCode()) : ""
+}
+
+//	true when a reply belongs to a request sent with a key other than the current one
+boolean keyReplaced(String sentTag, String currentTag) {
+	return sentTag ? sentTag != currentTag : false
+}
+
+//	for an app that renews the key: stores it, and restarts the SmartThings functions if they
+//	were waiting for a key
+def setSmartThingsKey(String key) {
+	key = key?.trim()
+	if (!key) {
+		logWarn("setSmartThingsKey: no key given")
+		return
+	}
+	if (!connectST) {
+		logWarn("setSmartThingsKey: turn on \"Connect to SmartThings for added functions\" and save first")
+		return
+	}
+	String old = stApiKey?.trim()
+	if (key == old) { return }
+	device.updateSetting("stApiKey", [type: "string", value: key])
+	if (!old || state.stAuthFailed) {
+		runIn(1, stUpdate)				//	the next run reads the new setting
+		logInfo("setSmartThingsKey: new key stored, SmartThings functions restarting")
+	} else {
+		logDebug("setSmartThingsKey: new key stored")
 	}
 }
 
@@ -1828,7 +1865,7 @@ def getDeviceList() {
 
 def getDeviceListParse(resp, data) {
 	def respData
-	if (resp.status == 401) { stAuthFailed() }
+	if (resp.status == 401) { stAuthFailed(data?.keyTag) }
 	if (resp.status != 200) {
 		respData = [status: "ERROR",
 					httpCode: resp.status,
@@ -1895,7 +1932,7 @@ def deviceCommand(cmdData) {
 		body: new groovy.json.JsonBuilder(cmdBody).toString(),
 		timeout: 10
 	]
-	asynchttpPost("deviceCommandParse", sendCmdParams, [capability: cmdData.capability])
+	asynchttpPost("deviceCommandParse", sendCmdParams, [capability: cmdData.capability, keyTag: stKeyTag(stApiKey)])
 }
 
 def deviceCommandParse(resp, data) {
@@ -1906,7 +1943,7 @@ def deviceCommandParse(resp, data) {
 			poll()
 		}
 	} else if (resp.status == 401) {
-		stAuthFailed()
+		stAuthFailed(data?.keyTag)
 	} else {
 		logWarn("deviceCommand: [status: FAILED, httpCode: ${resp.status}, capability: ${data.capability}]")
 		if (resp.status == 409) {
@@ -1990,7 +2027,7 @@ private asyncGet(sendData, passData = "none") {
 			headers: ['Authorization': 'Bearer ' + stApiKey.trim()],
 			timeout: 10]
 		try {
-			asynchttpGet(sendData.parse, sendCmdParams, [reason: passData])
+			asynchttpGet(sendData.parse, sendCmdParams, [reason: passData, keyTag: stKeyTag(stApiKey)])
 		} catch (error) {
 			logWarn("asyncGet: [status: FAILED, errorMsg: ${error}]")
 		}
@@ -2012,7 +2049,7 @@ def distResp(resp, data) {
 			resplog << [status: "ERROR", errorMsg: err]
 		}
 	} else if (resp.status == 401) {
-		stAuthFailed()
+		stAuthFailed(data?.keyTag)
 	} else {
 		resplog << [status: "ERROR",
 					httpCode: resp.status,
@@ -2025,6 +2062,7 @@ def distResp(resp, data) {
 
 // ===== Samsung TV SmartThings Capabilities (samsungTvST) =====
 
+command "setSmartThingsKey", [[name: "SmartThings API key", type: "STRING"]]
 command "toggleSoundMode", [[name: "SmartThings Function"]]
 command "togglePictureMode", [[name: "SmartThings Function"]]
 command "sourceSetST", ["SmartThings Function"]
@@ -2151,7 +2189,7 @@ def setTvChannel(newChannel) {
 
 // ===== Logging =====
 
-def version() { return "2.4.9" }
+def version() { return "2.4.10" }
 
 def label() { return device.displayName + "-${version()}" }
 
