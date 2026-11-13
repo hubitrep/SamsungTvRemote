@@ -17,8 +17,8 @@ definition(
     oauth: true,
     // Installed when first opened: the sign-in callback needs the app's access token before Done is pressed.
     installOnOpen: true,
-    importUrl: "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVSmartThingsLink.groovy",
-    documentationLink: "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md#smartthings",
+    importUrl: "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/smartthings-link/SamsungTVSmartThingsLink.groovy",
+    documentationLink: "https://github.com/hubitrep/SamsungTvRemote/blob/smartthings-link/README.md#smartthings",
     iconUrl: "",
     iconX2Url: "",
     // Refresh tokens are single-use: two refreshes at once would lose the session.
