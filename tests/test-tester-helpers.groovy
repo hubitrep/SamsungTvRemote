@@ -70,6 +70,7 @@ List<String> SIGNATURES = [
     'Map stPlan(int test, Map cur, Map st) {',
     'Map evalStStatus(List<Map> lines, Map steps, Map st, String appName, TimeZone tz) {',
     'Map evalStSet(List<Map> lines, List<Map> events, Map steps, Map plan, TimeZone tz) {',
+    'Map evalAppsSt(List<Map> lines, List<Map> events, Map steps, TimeZone tz) {',
     'boolean runStalled(Map run, long nowMs) {',
     'Map splitDiffs(List diffs, Map expect) {',
     'String verdictOf(Map r) {',
@@ -370,15 +371,29 @@ def at = { String ts -> h.tsMs("2026-10-15 ${ts}".toString(), utc) }
 
 println 'SmartThings: plan'
 Map stState = [pictureModes: ['Dynamic', 'Standard', 'Movie'], soundModes: '["Standard","Game"]']
-check 'volume down one', h.stPlan(12, [volume: 24], stState) == [cmd: 'setVolume', attr: 'volume', from: '24', to: '23']
+check 'volume down one', h.stPlan(12, [volume: 24], stState) ==
+    [attr: 'volume', from: '24', to: '23', set: [cmd: 'setVolume', args: ['23']], restore: [cmd: 'setVolume', args: ['24']]]
 check 'volume 0 goes up', h.stPlan(12, [volume: '0'], stState).to == '1'
-check 'no volume: skipped', h.stPlan(12, [volume: null], stState).skip != null
-check 'next picture mode, wrapping', h.stPlan(13, [pictureMode: 'Movie'], stState) == [cmd: 'setPictureMode', attr: 'pictureMode', from: 'Movie', to: 'Dynamic']
-check 'sound modes from JSON text', h.stPlan(14, [soundMode: 'Standard'], stState) == [cmd: 'setSoundMode', attr: 'soundMode', from: 'Standard', to: 'Game']
-check 'one mode: skipped', h.stPlan(13, [pictureMode: 'Movie'], [pictureModes: ['Movie']]).skip.contains('picture')
-check 'current mode not listed: skipped', h.stPlan(14, [soundMode: 'Odd'], stState).skip.contains('sound')
-check 'input set to itself', h.stPlan(15, [inputSource: 'HDMI1'], stState) == [cmd: 'setInputSource', attr: 'inputSource', from: 'HDMI1', to: 'HDMI1']
-check 'no input: skipped', h.stPlan(15, [inputSource: null], stState).skip != null
+check 'no volume: skipped', h.stPlan(12, [volume: null], stState).skip != null && h.stPlan(13, [volume: null], stState).skip != null
+check 'volume keys: down then up', h.stPlan(13, [volume: 24], stState) ==
+    [attr: 'volume', from: '24', to: '23', set: [cmd: 'volumeDown', args: []], restore: [cmd: 'volumeUp', args: []]]
+check 'volume keys at 0: up then down', h.stPlan(13, [volume: 0], stState).with { it.to == '1' && it.set.cmd == 'volumeUp' && it.restore.cmd == 'volumeDown' }
+check 'mute switched over', h.stPlan(14, [mute: 'unmuted'], stState) ==
+    [attr: 'mute', from: 'unmuted', to: 'muted', set: [cmd: 'mute', args: []], restore: [cmd: 'unmute', args: []]]
+check 'already muted: unmute first', h.stPlan(14, [mute: 'muted'], stState).with { it.to == 'unmuted' && it.set.cmd == 'unmute' && it.restore.cmd == 'mute' }
+check 'no mute: skipped', h.stPlan(14, [mute: null], stState).skip != null
+check 'next picture mode by toggle, wrapping, set back', h.stPlan(15, [pictureMode: 'Movie'], stState) ==
+    [attr: 'pictureMode', from: 'Movie', to: 'Dynamic', set: [cmd: 'togglePictureMode', args: []], restore: [cmd: 'setPictureMode', args: ['Movie']]]
+check 'sound modes from JSON text', h.stPlan(16, [soundMode: 'Standard'], stState) ==
+    [attr: 'soundMode', from: 'Standard', to: 'Game', set: [cmd: 'toggleSoundMode', args: []], restore: [cmd: 'setSoundMode', args: ['Standard']]]
+check 'one mode: skipped', h.stPlan(15, [pictureMode: 'Movie'], [pictureModes: ['Movie']]).skip.contains('picture')
+check 'current mode not listed: skipped', h.stPlan(16, [soundMode: 'Odd'], stState).skip.contains('sound')
+check 'input changed by key, set back', h.stPlan(17, [inputSource: 'HDMI1'], stState) ==
+    [attr: 'inputSource', from: 'HDMI1', to: null, set: [cmd: 'sourceToggle', args: []], restore: [cmd: 'setInputSource', args: ['HDMI1']]]
+check 'no input: skipped', h.stPlan(17, [inputSource: null], stState).skip != null
+check 'channel up, set back', h.stPlan(18, [tvChannel: '12'], stState) ==
+    [attr: 'tvChannel', from: '12', to: null, set: [cmd: 'channelUp', args: []], restore: [cmd: 'setTvChannel', args: ['12']]]
+check 'an app showing: no channel test', h.stPlan(18, [tvChannel: ' '], stState).skip.contains('channel')
 
 println 'SmartThings: status test'
 Map ss = h.evalStStatus([line('1:00:02.000', 'asyncGet: [parse: distResp, reason: statusParse]', 'debug'), line('1:00:03.000', ST1, 'debug')],
@@ -398,7 +413,7 @@ check 'rejected key', ss401.answered == false && ss401.statusMs == null && ss401
 check 'key rejected before the run', h.evalStStatus([], [status: [ok: false]], [stAuthFailed: true], ' ', utc).problem.contains('rejected')
 
 println 'SmartThings: set tests'
-Map volPlan = [cmd: 'setVolume', attr: 'volume', from: '24', to: '23']
+Map volPlan = [attr: 'volume', from: '24', to: '23']
 Map stSteps = [set: [ok: true, ms: 2500L, at: at('1:00:00.000')], check: [ok: true, ms: 1500L, at: at('1:00:10.000')], restore: [ok: true, ms: 2000L, at: at('1:00:20.000')]]
 Map expSet = [commandStatus: [eq: 200], valueSet: [eq: true], statusLags: [eq: false], event: [eq: true, driver: true, optional: true], restored: [eq: true]]
 Map vs = h.evalStSet([stLine('1:00:02.500', 23), stLine('1:00:11.500', 23), stLine('1:00:22.000', 24)], [[name: 'volume', value: '23', at: 1L]], stSteps, volPlan, utc)
@@ -417,14 +432,47 @@ check 'no line at all', h.evalStSet([], [], [set: [ok: false, at: at('1:00:00.00
 check 'a failed restore does not change the command status',
     h.evalStSet([stLine('1:00:02.500', 23), stLine('1:00:11.500', 23), line('1:00:21.000', 'deviceCommand: [status: FAILED, httpCode: 409, capability: audioVolume]', 'warn')],
                 [[name: 'volume', value: '23', at: 1L]], stSteps, volPlan, utc).with { it.commandStatus == 200 && it.restored == false }
-Map inPlan = [cmd: 'setInputSource', attr: 'inputSource', from: 'HDMI1', to: 'HDMI1']
-Map vi = h.evalStSet([stLine('1:00:02.500', 24)], [], [set: [ok: true, ms: 2500L, at: at('1:00:00.000')]], inPlan, utc)
-check 'input set to itself', vi == [value: 'HDMI1', commandStatus: 200, unchanged: true] && h.differences(vi, [commandStatus: [eq: 200], unchanged: [eq: true]]) == []
+def inLine = { String ts, String input, String ch = '12' -> line(ts, "[method:statusParse, volume:24, mute:unmuted, inputSource:${input}, tvChannel:${ch}, tvChannelName:News, pictureMode:Movie, soundMode:Standard]".toString(), 'debug') }
+Map inPlan = [attr: 'inputSource', from: 'HDMI1', to: null]
+Map vi = h.evalStSet([inLine('1:00:04.000', 'HDMI1'), inLine('1:00:11.500', 'HDMI2'), inLine('1:00:22.000', 'HDMI1')], [[name: 'inputSource', value: 'HDMI2', at: 1L]], stSteps, inPlan, utc)
+check 'input: any other value counts, late first status', vi.to == 'HDMI2' && vi.valueSet && vi.statusLags && vi.event == true && vi.restored == true
+Map vi2 = h.evalStSet([inLine('1:00:04.000', 'HDMI1'), inLine('1:00:11.500', 'HDMI1'), inLine('1:00:22.000', 'HDMI1')], [], stSteps, inPlan, utc)
+check 'input never changed', vi2.to == null && vi2.valueSet == false && !vi2.statusLags && !vi2.containsKey('event') && h.differences(vi2, expSet) == ['valueSet']
+Map vi3 = h.evalStSet([inLine('1:00:04.000', 'HDMI2'), inLine('1:00:11.500', 'HDMI2'), inLine('1:00:22.000', 'HDMI2')], [[name: 'inputSource', value: 'HDMI2', at: 1L]], stSteps, inPlan, utc)
+check 'input not put back', vi3.valueSet && vi3.restored == false && h.differences(vi3, expSet) == ['restored']
 check 'picture mode', h.evalStSet([stLine('1:00:02.500', 24, 'Dynamic'), stLine('1:00:11.500', 24, 'Dynamic'), stLine('1:00:22.000', 24, 'Movie')],
-    [[name: 'pictureMode', value: 'Dynamic', at: 1L]], stSteps, [cmd: 'setPictureMode', attr: 'pictureMode', from: 'Movie', to: 'Dynamic'], utc).with { it.valueSet && it.event && it.restored }
+    [[name: 'pictureMode', value: 'Dynamic', at: 1L]], stSteps, [attr: 'pictureMode', from: 'Movie', to: 'Dynamic'], utc).with { it.valueSet && it.event && it.restored }
 check 'problem line masked', h.stProblem([line('1:00:01.000', 'distResp: [status:ERROR, httpCode:500, errorMsg:host 192.168.1.9]', 'warn')]) == 'distResp: [status:ERROR, httpCode:500, errorMsg:host <ip>]'
 check 'trace keeps SmartThings debug lines, drops other debug',
     h.traceLines([stLine('1:00:02.500', 23), line('1:00:03.000', 'push: button = 1', 'debug'), line('1:00:04.000', 'deviceCommand: [component:main]', 'debug')]).size() == 2
+
+check 'channel up and back', h.evalStSet([inLine('1:00:04.000', 'HDMI1', '13'), inLine('1:00:11.500', 'HDMI1', '13'), inLine('1:00:22.000', 'HDMI1', '12')],
+    [[name: 'tvChannel', value: '13', at: 1L]], stSteps, [attr: 'tvChannel', from: '12', to: null], utc).with { it.to == '13' && it.valueSet && !it.statusLags && it.event && it.restored }
+check 'channel gone blank is not a change', h.evalStSet([inLine('1:00:04.000', 'HDMI1', ' ')], [], stSteps, [attr: 'tvChannel', from: '12', to: null], utc).valueSet == false
+def muteLine = { String ts, String m -> line(ts, "[method:statusParse, volume:24, mute:${m}, inputSource:HDMI1, tvChannel:12, tvChannelName:News, pictureMode:Movie, soundMode:Standard]".toString(), 'debug') }
+check 'mute', h.evalStSet([muteLine('1:00:02.500', 'muted'), muteLine('1:00:11.500', 'muted'), muteLine('1:00:22.000', 'unmuted')],
+    [[name: 'mute', value: 'muted', at: 1L]], stSteps, [attr: 'mute', from: 'unmuted', to: 'muted'], utc).with { it.valueSet && it.event && it.restored && !it.statusLags }
+
+println 'SmartThings: apps test'
+def appLine = { String ts, String ch, String name -> line(ts, "[method:statusParse, volume:24, mute:unmuted, inputSource:HDMI1, tvChannel:${ch}, tvChannelName:${name}, pictureMode:Movie, soundMode:Standard]".toString(), 'debug') }
+Map appSteps = [launch: [ok: true, ms: 900L, at: at('1:00:00.000')], close: [ok: true, ms: 500L, at: at('1:00:30.000')]]
+Map expApp = [stAppReported: [eq: true, optional: true], nameKept: [eq: true, driver: true, optional: true], stClearsApp: [eq: true, optional: true]]
+Map as1 = h.evalAppsSt([appLine('1:00:11.000', ' ', '9Ur5IzDKqV.TizenYouTube'), appLine('1:00:36.000', '12', 'News')],
+    [[name: 'appName', value: 'YouTube', at: at('1:00:01.000')], [name: 'appName', value: ' ', at: at('1:00:30.500')]], appSteps, utc)
+check 'app reported, name kept, cleared after close', as1 == [stAppCode: '9Ur5IzDKqV.TizenYouTube', stAppReported: true, nameKept: true,
+    stAppAfterClose: 'none', stClearsApp: true] && h.differences(as1, expApp) == []
+Map as2 = h.evalAppsSt([appLine('1:00:11.000', ' ', 'abc.Unknown'), appLine('1:00:36.000', ' ', 'abc.Unknown')],
+    [[name: 'appName', value: 'YouTube', at: at('1:00:01.000')], [name: 'appName', value: ' ', at: at('1:00:14.000')]], appSteps, utc)
+check 'name blanked by the status: the driver differs', as2.nameKept == false && as2.stClearsApp == false && as2.stAppAfterClose == 'abc.Unknown' &&
+    h.splitDiffs(h.differences(as2, expApp), expApp) == [driverDiffs: ['nameKept'], tvDiffs: ['stClearsApp']]
+Map as3 = h.evalAppsSt([appLine('1:00:11.000', '12', 'News')], [[name: 'appName', value: 'YouTube', at: at('1:00:01.000')]], appSteps, utc)
+check 'SmartThings still shows a channel', as3.stAppReported == false && as3.stAppCode == null && !as3.containsKey('stClearsApp')
+check 'no status at all: nothing judged', h.evalAppsSt([], [], appSteps, utc) == [:] && h.differences([:], expApp) == []
+
+println 'SmartThings: wake in the power-on test'
+check 'stWake only when the driver asked SmartThings',
+    h.evalPowerOn([line('1:00:17.000', 'stPowerOn: [reason: no answer to Wake-on-LAN]', 'info')], [], [:], at('1:00:00.000'), utc).stWake == true &&
+    !h.evalPowerOn([], [], [:], at('1:00:00.000'), utc).containsKey('stWake')
 
 println 'deviceInfoFields'
 Map fi = h.deviceInfoFields([device: [OS: 'Tizen', duid: 'uuid:x', wifiMac: 'f4:7b:09:12:34:56', PowerState: 'on'], version: '2.0.25',

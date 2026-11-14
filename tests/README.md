@@ -42,16 +42,21 @@ section with the presses made since the previous report.
 | 8 | Power off | how the TV goes away, from `/api/v2/` read every 5 s; the switch goes off and stays off |
 | 9 | Standby check | a socket opened with the TV in standby: `ms.channel.timeOut` expected on TVs without `PowerState`, recorded on the others |
 | 10 | Power on | Wake-on-LAN sends; the TV's `/api/v2/` read every 5 s for 2 minutes; when the picture came on (asked); the switch |
-| 11 | SmartThings status | SmartThings answers the driver's status request and reports the TV on; which input, picture and sound capabilities the TV uses; whether the driver named the app showing |
-| 12 | SmartThings volume | the volume one step down through SmartThings, read back twice, then put back |
-| 13 | SmartThings picture mode | the next picture mode in SmartThings' list, read back twice, then put back |
-| 14 | SmartThings sound mode | the same for the sound mode |
-| 15 | SmartThings input | the input set to the one already showing: whether SmartThings accepts the command |
+| 11 | SmartThings status | SmartThings answers the driver's status request and reports the TV on; which input, picture and sound capabilities the TV uses; whether the driver named the app showing, and what the TV answers when asked for that app's name |
+| 12 | SmartThings volume | `setVolume` one step down, read back twice, then put back |
+| 13 | SmartThings volume keys | the volume-down key, the new volume read back from SmartThings, then the volume-up key |
+| 14 | SmartThings mute | mute switched over by `mute` or `unmute`, read back twice, then put back |
+| 15 | SmartThings picture mode | `togglePictureMode` to the next mode in SmartThings' list, read back twice, then `setPictureMode` back |
+| 16 | SmartThings sound mode | the same for the sound mode |
+| 17 | SmartThings input | the input key, the new input read back from SmartThings, then `setInputSource` back to the first one (the picture changes for a few seconds) |
+| 18 | SmartThings channel | channel up, the new channel read back, then `setTvChannel` back; skipped unless the TV shows a TV channel |
 
-Tests 11 to 15 run only on a device with **Connect to SmartThings** on and a working key; on any other
-device they are skipped. They turn the driver's debug logging on for the run. Each value is read back
-once after the command and once after a second status request, because SmartThings can answer the
-first with the old value (`statusLags`).
+Tests 11 to 18 run only on a device with **Connect to SmartThings** on and a working key; on any other
+device they are skipped. On such a device the Apps test also checks that SmartThings reports the app
+launched, that the driver's name for it survives that report, and what SmartThings reports after the
+close; the Power on test notes when the driver had to ask SmartThings to wake the TV (`stWake`). The
+run turns the driver's debug logging on. Each value is read back once after the command and once after
+a second status request, because SmartThings can answer the first with the old value (`statusLags`).
 
 For the maintainer, every report also carries the TV's model fields from `/api/v2/`, the protocol
 lines of the handshake, art and app-list replies (masked), any event the driver doesn't handle
