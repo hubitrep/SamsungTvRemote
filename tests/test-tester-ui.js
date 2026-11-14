@@ -24,8 +24,8 @@ const eq = assert.strictEqual;
 // Objects from the vm context have another prototype; compare as JSON.
 const deq = (a, b) => assert.deepStrictEqual(JSON.parse(JSON.stringify(a)), b);
 
-check('CODE_VERSION literal in file', () => assert.ok(html.includes("const CODE_VERSION = '0.4.0'")));
-check('CODE_VERSION exported', () => eq(U.CODE_VERSION, '0.4.0'));
+check('CODE_VERSION literal in file', () => assert.ok(html.includes("const CODE_VERSION = '0.5.0'")));
+check('CODE_VERSION exported', () => eq(U.CODE_VERSION, '0.5.0'));
 check('required element ids present', () => {
   for (const id of ['run', 'abort', 'setup-pom', 'setup-ipr', 'setup-attended', 'rows', 'current-countdown', 'prompt', 'prompt-text', 'prompt-buttons', 'prompt-countdown',
     'timeout-note', 'report', 'copy', 'download-profile', 'pad', 'version-banner', 'pad-log', 'pad-log-copy', 'pad-log-clear']) {
@@ -108,7 +108,7 @@ check('rowHtml selectable checkbox', () => {
   assert.ok(h.includes('data-pick="3"') && !h.includes(' checked'));
 });
 check('idleRows list', () => {
-  const r = U.idleRows(); eq(r.length, 10); eq(r[0].test, 1); eq(r[9].test, 10); assert.ok(r.every(x => x.state === 'not run'));
+  const r = U.idleRows(); eq(r.length, 15); eq(r[0].test, 1); eq(r[9].test, 10); eq(r[14].test, 15); assert.ok(r.every(x => x.state === 'not run'));
 });
 check('runMode', () => {
   eq(U.runMode(null), 'before'); eq(U.runMode({ status: null }), 'before'); eq(U.runMode({ status: 'running' }), 'running');
@@ -262,7 +262,7 @@ check('attended checkbox is in the setup box and checked by default', () => {
   assert.ok(/<section id="setup">[\s\S]*<input type="checkbox" id="setup-attended" checked>[\s\S]*<\/section>/.test(html));
 });
 check('runParams subset of tests', () => {
-  eq(U.runParams({}, { 1: false, 2: false }).tests, '3,4,5,6,7,8,9,10');
+  eq(U.runParams({}, { 1: false, 2: false }).tests, '3,4,5,6,7,8,9,10,11,12,13,14,15');
   eq(U.runParams({}, { 1: true }).tests, undefined);
 });
 

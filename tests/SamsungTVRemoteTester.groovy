@@ -28,7 +28,7 @@ import groovy.json.JsonSlurper
 import java.nio.file.NoSuchFileException
 import java.text.SimpleDateFormat
 
-@Field static final String CODE_VERSION = "0.4.0"
+@Field static final String CODE_VERSION = "0.5.0"
 
 @Field static final String BUSY = "a run is in progress"
 
@@ -41,12 +41,19 @@ import java.text.SimpleDateFormat
 @Field static final String UI_URL = "https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/tests/samsung-tv-tester-ui.html"
 @Field static final Map TEST_NAMES = [
     0: "Connection", 1: "Device info", 2: "Remote socket", 3: "Key burst", 4: "Apps", 5: "App list",
-    6: "Discovery", 7: "Art mode", 8: "Power off", 9: "Standby check", 10: "Power on"
+    6: "Discovery", 7: "Art mode", 8: "Power off", 9: "Standby check", 10: "Power on",
+    11: "SmartThings status", 12: "SmartThings volume", 13: "SmartThings picture mode", 14: "SmartThings sound mode",
+    15: "SmartThings input"
 ]
 
 // Run order, and the test numbers follow it: power last, so the TV ends on, and art mode before it, so the
-// power cycle resets art mode. Discovery needs the TV on, so it runs before the power tests.
-@Field static final List<Integer> ORDER = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+// power cycle resets art mode. Discovery needs the TV on, so it runs before the power tests. The SmartThings
+// tests come after the power-on; they are skipped for a device that doesn't use SmartThings.
+@Field static final List<Integer> ORDER = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+// A SmartThings step ends on the driver's status line, or on the line it logs when SmartThings refuses.
+@Field static final String ST_WAIT = '^\\[method:statusParse|^deviceCommand: \\[status: FAILED|^SmartThings rejected the API key|^distResp: '
+@Field static final Map ST_WHAT = [12: "volume", 13: "picture mode", 14: "sound mode", 15: "input"]
 
 // Device info fields that describe the model, not the user; the rest (ids, names, addresses) stay out of the report.
 @Field static final List DEVICE_INFO_KEYS = ["FrameTVSupport", "GamePadSupport", "ImeSyncedSupport", "Language", "OS", "PowerState",
@@ -60,7 +67,8 @@ import java.text.SimpleDateFormat
 @Field static final List KNOWN_ART_EVENTS = ["artmode_status", "art_mode_changed", "set_artmode_status"]
 
 // The device's attributes the run watches, to check what the driver made of the TV's messages.
-@Field static final List TV_ATTRIBUTES = ["switch", "wsStatus", "artModeStatus", "appName", "appId"]
+@Field static final List TV_ATTRIBUTES = ["switch", "wsStatus", "artModeStatus", "appName", "appId",
+                                          "volume", "pictureMode", "soundMode", "inputSource"]
 
 // What the driver assumes about a TV, and what it must do in answer. A field outside its rule is a
 // difference. Fields marked driver: true judge the driver (its events, its sockets); the others judge
@@ -81,7 +89,15 @@ import java.text.SimpleDateFormat
     9: [probeReply: [eq: "ms.channel.timeOut"], stayedOff: [eq: true, driver: true]],
     // restOnMs is left out of the fields for a TV with no PowerState; that TV already differs in test 1.
     10: [onEvent: [eq: true, driver: true], restOnMs: [max: 45000, optional: true], powerStateLags: [eq: false],
-         switchLags: [eq: false, driver: true]]
+         switchLags: [eq: false, driver: true]],
+    // appNamed is there only while the TV shows an app.
+    11: [answered: [eq: true], reportsOn: [eq: true], problem: [none: true], appNamed: [eq: true, optional: true]],
+    // The value is set, read back, and put back. event is there only when SmartThings reported the new value.
+    12: [commandStatus: [eq: 200], valueSet: [eq: true], statusLags: [eq: false], event: [eq: true, driver: true, optional: true], restored: [eq: true]],
+    13: [commandStatus: [eq: 200], valueSet: [eq: true], statusLags: [eq: false], event: [eq: true, driver: true, optional: true], restored: [eq: true]],
+    14: [commandStatus: [eq: 200], valueSet: [eq: true], statusLags: [eq: false], event: [eq: true, driver: true, optional: true], restored: [eq: true]],
+    // The input is set to the one already showing, so the picture doesn't change.
+    15: [commandStatus: [eq: 200], unchanged: [eq: true]]
 ]
 
 
@@ -238,16 +254,20 @@ String startRun(Map opts) {
     state.setup = setup
     // The pad may have turned trace on: the run restores what the person had before the pad, not the pad's own setting.
     boolean startTrace = runStartTrace(state.padTrace as Map, tv.getSetting("traceLog"))
+    // The SmartThings tests read the driver's debug lines; only a run that has them turns debug logging on.
+    boolean stRun = tv.getSetting("connectST") == true && tests.any { (it as int) >= 11 }
     unschedule("padTraceRestore")
     state.remove("padTrace")
     state.run = [status: "running", reason: null, tests: [0] + tests, idx: 0, step: 0, results: [], events: [], startedAt: now(),
                  runSince: nowTs(),
                  pollS: pollS, setup: setup, prompts: [:],
                  ctx: [startSwitch: tv.currentValue("switch"), startTrace: startTrace,
+                       stRun: stRun, startDebug: tv.getSetting("logEnable") == true,
                        startInfo: tv.getSetting("infoLog") != false, frame: tv.getDataValue("frameTv") == "true",
                        powerState: tv.getDataValue("powerStateReported") != "false"]]
     tv.updateSetting("traceLog", [value: "true", type: "bool"])
     tv.updateSetting("infoLog", [value: "true", type: "bool"])
+    if (stRun) tv.updateSetting("logEnable", [value: "true", type: "bool"])
     // filterEvents: false delivers repeats too: the driver sends switch on every poll.
     TV_ATTRIBUTES.each { subscribe(tv, it as String, "onTvEvent", [filterEvents: false]) }
     logCmd "Run started: tests ${tests.join(', ')}"
@@ -287,6 +307,10 @@ void finishRun(String status, String reason) {
     try {
         tv.updateSetting("traceLog", [value: ctx.startTrace ? "true" : "false", type: "bool"])
         tv.updateSetting("infoLog", [value: ctx.startInfo ? "true" : "false", type: "bool"])
+        if (ctx.stRun) tv.updateSetting("logEnable", [value: ctx.startDebug ? "true" : "false", type: "bool"])
+        // A run that ended between a SmartThings set and its restore puts the value back.
+        Map back = ctx.stRestore as Map
+        if (back) deviceCommand(back.cmd as String, [[type: "STRING", value: back.value as String]])
         if (ctx.startSwitch == "off" && tv.currentValue("switch") == "on") deviceCommand("off")
     } catch (e) {
         logError "Cleanup failed: ${e.message}"
@@ -315,8 +339,10 @@ void onTvEvent(evt) {
 // The driver's debugLogOff can turn trace off part-way through a run. Turn it back on and remember the
 // test, whose differences may then come from missing lines.
 private void keepTrace(Map run) {
-    if (tv.getSetting("traceLog") == true) return
+    boolean debugOff = run.ctx.stRun == true && tv.getSetting("logEnable") != true
+    if (tv.getSetting("traceLog") == true && !debugOff) return
     tv.updateSetting("traceLog", [value: "true", type: "bool"])
+    if (debugOff) tv.updateSetting("logEnable", [value: "true", type: "bool"])
     int test = run.tests[run.idx] as int
     List off = (run.traceOff ?: []) as List
     if (!(test in off)) off << test
@@ -449,6 +475,18 @@ String skipReason(int test, Map run) {
             ctx.app = ["YouTube", "Netflix"].find { appCode(it as String) }
             state.run = run
             return ctx.app ? null : "the device has no app code for YouTube or Netflix (turn on its app search, or link SmartThings)"
+        case 11: case 12: case 13: case 14: case 15:
+            if (tv.getSetting("connectST") != true) return "SmartThings is not turned on for the device"
+            if (!tv.getSetting("stApiKey") || !tv.getSetting("stDeviceId")) return "the device has no SmartThings key or no SmartThings TV yet"
+            if (tv.currentValue("switch") != "on") return "the TV is not on"
+            if (ctx.stDown) return "SmartThings did not answer the device's requests"
+            if (ctx.stOff) return "SmartThings reports the TV off"
+            if (test == 11) return null
+            Map plan = stPlan(test, [volume: tv.currentValue("volume"), pictureMode: tv.currentValue("pictureMode"),
+                                     soundMode: tv.currentValue("soundMode"), inputSource: tv.currentValue("inputSource")], deviceState())
+            ctx.stPlan = plan.skip ? null : plan
+            state.run = run
+            return plan.skip as String
         default: return null
     }
 }
@@ -481,6 +519,13 @@ void sendStep(Map s, Map run) {
         case "on": case "off": case "close": case "refresh": case "home": case "configure": case "artMode":
         case "appClose": case "getInstalledApps": case "findTvs":
             deviceCommand(s.cmd as String); break
+        case "setVolume": case "setPictureMode": case "setSoundMode": case "setInputSource":
+            Map ctx = run.ctx as Map
+            Map plan = (ctx.stPlan ?: [:]) as Map
+            if (s.name == "set" && plan.to != plan.from) ctx.stRestore = [cmd: s.cmd, value: plan.from]
+            if (s.name == "restore") ctx.remove("stRestore")
+            state.run = run
+            deviceCommand(s.cmd as String, [[type: "STRING", value: args[0] as String]]); break
         default: throw new IllegalArgumentException("unknown step command ${s.cmd}")
     }
 }
@@ -736,6 +781,11 @@ void finishTestLines(resp, Map data) {
         if (test == 7 && info) r.observed = (r.observed as Map) + [powerStateInArt: (info.device as Map)?.PowerState ?: (info.status == 200 ? "absent" : "no answer")]
         r.samples = sampleLines(test, lines)
         if (test == 2 && (r.observed as Map)?.handshake == "ms.channel.unauthorized") run.ctx.refused = true
+        // Without an answer from SmartThings, or with the TV off there, the tests that set values are skipped.
+        Map seen = (r.observed ?: [:]) as Map
+        if (test == 11 && seen.answered != true) run.ctx.stDown = true
+        if (test == 11 && seen.answered == true && seen.reportsOn != true) run.ctx.stOff = true
+        if (test in [12, 13, 14, 15] && seen.commandStatus == 401) run.ctx.stDown = true
         if (test in ((run.traceOff ?: []) as List)) r.note = "trace logging was off for part of this test, so lines may be missing"
         (run.results as List) << r
     }
@@ -792,6 +842,8 @@ Map evaluateTest(int test, List<Map> lines, Map steps, Map run, List<Map> events
             f = evalPowerOn(lines, events, steps, onAt, tz, (steps.watch?.readings ?: []) as List,
                             pictureMs((run.prompts as Map)?.picture as Map, onAt), (run.pollS ?: 60) as int, steps.watch?.watchMs as Long)
             break
+        case 11: f = evalStStatus(lines, steps, deviceState(), tv.currentValue("appName") as String, tz); break
+        case 12: case 13: case 14: case 15: f = evalStSet(lines, events, steps, (run.ctx.stPlan ?: [:]) as Map, tz); break
         default: f = [:]
     }
     f.putAll(promptFields(test, (run.prompts ?: [:]) as Map))
@@ -799,7 +851,7 @@ Map evaluateTest(int test, List<Map> lines, Map steps, Map run, List<Map> events
     if (other) f.otherMessages = other
     r.observed = f
     // Discovery is judged by the TV's model year, read from its REST model field.
-    Map expect = (test == 10) ? discoveryExpect(modelYear((info?.device as Map)?.model as String)) : (EXPECT[test] as Map)
+    Map expect = (test == 6) ? discoveryExpect(modelYear((info?.device as Map)?.model as String)) : (EXPECT[test] as Map)
     // A TV that reports PowerState is not probed by the driver, so the probe's reply is recorded without a judgement.
     if (test == 9 && run.ctx.powerState) expect = expect.findAll { k, v -> k != "probeReply" }
     r.diffs = differences(f, expect)
@@ -855,6 +907,19 @@ List<Map> stepsFor(int test, Map run) {
                         [name: "settle", label: "Letting the TV settle", sleep: 5]]
         // The person says when the picture is on; the watch reads REST and the driver's switch meanwhile.
         case 10: return [[name: "watch", label: "Waiting for the TV to report on", cmd: "on", watch: "on", prompt: "picture", timeout: 120, after: 5]]
+        // Refresh makes the driver ask SmartThings for the TV's status; SmartThings can be late after a power-on.
+        case 11: return [[name: "settle", label: "Letting SmartThings catch up", sleep: 5],
+                         [name: "status", label: "Waiting for SmartThings to report the TV's status", cmd: "refresh", wait: ST_WAIT, timeout: 30]]
+        // Set, read again (SmartThings can answer the driver's own read with the old value), put back.
+        case 12: case 13: case 14: case 15:
+            Map p = (run.ctx.stPlan ?: [:]) as Map
+            String what = ST_WHAT[test]
+            List<Map> st = [[name: "set", label: "Setting the ${what} through SmartThings".toString(), cmd: p.cmd, args: [p.to], wait: ST_WAIT, timeout: 30, after: 5]]
+            if (p.to != p.from) {
+                st << [name: "check", label: "Reading the ${what} again".toString(), cmd: "refresh", wait: ST_WAIT, timeout: 30, after: 2]
+                st << [name: "restore", label: "Putting the ${what} back".toString(), cmd: p.cmd, args: [p.from], wait: ST_WAIT, timeout: 30, after: 2]
+            }
+            return st
         default:
             return []
     }
@@ -1192,8 +1257,10 @@ String maskLine(String s) {
 List<String> traceLines(List<Map> lines) {
     List<String> out = []
     for (Map l : lines) {
-        if (l.level != "trace" && !(l.level in ["warn", "error"])) continue
         String msg = l.msg as String
+        // The driver logs its SmartThings calls at debug.
+        boolean st = l.level == "debug" && msg =~ /^(deviceCommand: |asyncGet: |\[method:(statusParse|updateAppName)|stAuthFailed: |setSmartThingsKey: )/
+        if (l.level != "trace" && !(l.level in ["warn", "error"]) && !st) continue
         if (msg.startsWith("rest: ")) msg = msg.replaceAll(' keys=.*', '')
         if (msg.startsWith("mdns: ")) msg = msg.replaceFirst(/^mdns: name=.*? ip=/, "mdns: name=<name> ip=")
         out << "${(l.ts as String).substring(11)} ${maskLine(msg).take(300)}".toString()
@@ -1425,6 +1492,112 @@ Map evalDiscovery(List<Map> lines, String ip) {
         if (m.find() && m.group(1) == ip) return [result: "found", model: m.group(2), keys: m.group(3)]
     }
     return [result: "other"]
+}
+
+// ── SmartThings: pure helpers ──
+
+// The driver's status line, "[method:statusParse, volume:24, mute:unmuted, ...]", as a map. Empty when
+// SmartThings reported the TV off: the driver then logs the method alone.
+Map stStatusFields(String msg) {
+    Map out = [:]
+    String alt = "volume|mute|inputSource|tvChannelName|tvChannel|pictureMode|soundMode"
+    String body = (msg ?: "").replaceFirst(/^\[method:statusParse(, )?/, "").replaceFirst(/\]$/, "")
+    def m = body =~ ("(?:^|, )(" + alt + "):(.*?)(?=, (?:" + alt + "):|\$)")
+    while (m.find()) out[m.group(1)] = m.group(2) == "null" ? null : m.group(2)
+    return out
+}
+
+// Every status line with its time, in order.
+List<Map> stStatuses(List<Map> lines, TimeZone tz) {
+    return lines.findAll { (it.msg as String).startsWith("[method:statusParse") }
+                .collect { [atMs: tsMs(it.ts as String, tz), vals: stStatusFields(it.msg as String)] }
+}
+
+// The first line the driver logs when a SmartThings call fails, masked.
+String stProblem(List<Map> lines) {
+    Map bad = lines.find { (it.msg as String) =~ /^(deviceCommand: \[status: FAILED|SmartThings rejected the API key|distResp: |asyncGet: \[status|<b>Conflict)/ }
+    return bad ? maskLine(bad.msg as String).take(200) : null
+}
+
+// A mode list from the driver's state: a list, or its JSON text.
+List<String> stModes(Object raw) {
+    def v = raw
+    if (v instanceof String) { try { v = new JsonSlurper().parseText(v as String) } catch (e) { v = null } }
+    return v instanceof List ? (v as List).collect { it as String } : []
+}
+
+// What a SmartThings test sets and puts back: [cmd, attr, from, to], or [skip: reason]. The volume goes
+// down by one, a mode goes to the next in SmartThings' list, the input is set to the one showing.
+Map stPlan(int test, Map cur, Map st) {
+    if (test == 12) {
+        String v = cur.volume?.toString()
+        if (v == null || !v.isInteger()) return [skip: "SmartThings has not reported a volume"]
+        int n = v as int
+        return [cmd: "setVolume", attr: "volume", from: v, to: (n > 0 ? n - 1 : 1).toString()]
+    }
+    if (test == 13 || test == 14) {
+        String attr = test == 13 ? "pictureMode" : "soundMode"
+        String now = cur[attr]?.toString()
+        List<String> modes = stModes(test == 13 ? st?.pictureModes : st?.soundModes)
+        int at = modes.indexOf(now)
+        if (at < 0 || modes.size() < 2) return [skip: "SmartThings lists no other ${test == 13 ? 'picture' : 'sound'} mode to change to".toString()]
+        return [cmd: test == 13 ? "setPictureMode" : "setSoundMode", attr: attr, from: now, to: modes[(at + 1) % modes.size()]]
+    }
+    String input = cur.inputSource?.toString()
+    if (!input || input == "null") return [skip: "SmartThings has not reported an input"]
+    return [cmd: "setInputSource", attr: "inputSource", from: input, to: input]
+}
+
+// SmartThings' answer to the driver's status request, and which of the TV's capabilities the driver uses.
+Map evalStStatus(List<Map> lines, Map steps, Map st, String appName, TimeZone tz) {
+    List<Map> all = stStatuses(lines, tz)
+    Map v = all ? (all[-1].vals as Map) : null
+    Map f = [answered: v != null, statusMs: v != null && steps.status?.ok ? steps.status.ms : null,
+             reportsOn: v != null && v.volume != null, problem: stProblem(lines)]
+    // A key SmartThings rejected earlier: the driver makes no more requests, so no line says why.
+    if (!f.problem && v == null && st?.stAuthFailed == true) f.problem = "the driver stopped using SmartThings: the key was rejected (HTTP 401)"
+    if (v) {
+        f.putAll([inputSource: v.inputSource, pictureMode: v.pictureMode, soundMode: v.soundMode])
+        // A blank channel with a dotted name is an app's code; the driver asks the TV for its name.
+        if (!(v.tvChannel as String)?.trim() && (v.tvChannelName as String)?.contains(".")) {
+            f.appCode = v.tvChannelName
+            f.appNamed = (appName ?: "").trim() != ""
+        }
+    }
+    f.putAll([inputCap: st?.inputSourceCap, pictureCap: st?.pictureModeCap, soundCap: st?.soundModeCap,
+              pictureModes: stModes(st?.pictureModes).join("|"), soundModes: stModes(st?.soundModes).join("|")])
+    return f
+}
+
+// One value set through SmartThings: what SmartThings answered, what its status showed right after the
+// command and after a second read, the driver's event, and the value put back.
+Map evalStSet(List<Map> lines, List<Map> events, Map steps, Map plan, TimeZone tz) {
+    String attr = plan.attr as String
+    List<Map> all = stStatuses(lines, tz)
+    Long setAt = steps.set?.at as Long, checkAt = steps.check?.at as Long, restoreAt = steps.restore?.at as Long
+    Long setEnd = checkAt ?: restoreAt
+    def seen = { Long from, Long to ->
+        if (from == null) return null
+        Map hit = all.find { (it.atMs as long) >= from && (to == null || (it.atMs as long) < to) }
+        return hit ? (hit.vals as Map)[attr] as String : null
+    }
+    String first = seen(setAt, setEnd)
+    String later = seen(checkAt, restoreAt)
+    List<Map> during = lines.findAll { setEnd == null || tsMs(it.ts as String, tz) < setEnd }
+    Object status = "no answer"
+    Map failed = firstLine(during, '^deviceCommand: \\[status: FAILED')
+    if (failed) {
+        def m = (failed.msg as String) =~ /httpCode: (\d+)/
+        status = m.find() ? (m.group(1) as Integer) : "failed"
+    } else if (firstLine(during, '^SmartThings rejected the API key')) status = 401
+    else if (first != null) status = 200
+    if (plan.to == plan.from) return [value: plan.from, commandStatus: status, unchanged: first == null ? null : first == plan.from]
+    boolean set = (later ?: first) == plan.to
+    Map f = [from: plan.from, to: plan.to, commandStatus: status, setMs: status == 200 ? steps.set?.ms : null,
+             firstStatus: first, laterStatus: later, valueSet: set, statusLags: first != plan.to && later == plan.to]
+    if (set) f.event = events.any { it.name == attr && (it.value as String) == plan.to }
+    f.restored = seen(restoreAt, null) == plan.from
+    return f
 }
 
 // The model year from the REST model field ("20_KANTSU2_UHD_BASIC" is 2020); null when it can't be read.

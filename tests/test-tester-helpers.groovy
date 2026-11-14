@@ -63,6 +63,13 @@ List<String> SIGNATURES = [
     'Map evalDiscovery(List<Map> lines, String ip) {',
     'Integer modelYear(String model) {',
     'Map discoveryExpect(Integer year) {',
+    'Map stStatusFields(String msg) {',
+    'List<Map> stStatuses(List<Map> lines, TimeZone tz) {',
+    'String stProblem(List<Map> lines) {',
+    'List<String> stModes(Object raw) {',
+    'Map stPlan(int test, Map cur, Map st) {',
+    'Map evalStStatus(List<Map> lines, Map steps, Map st, String appName, TimeZone tz) {',
+    'Map evalStSet(List<Map> lines, List<Map> events, Map steps, Map plan, TimeZone tz) {',
     'boolean runStalled(Map run, long nowMs) {',
     'Map splitDiffs(List diffs, Map expect) {',
     'String verdictOf(Map r) {',
@@ -349,6 +356,75 @@ println 'discovery in the report'
 check 'name masked in the trace', h.traceLines([line('1:00:00.000', mline)]) == ['1:00:00.000 mdns: name=<name> ip=<ip> manufacturer=Samsung model=UMOCK keys=deviceid,manufacturer,model,serialNumber']
 check 'mock profile gets airplay model', h.profileFields([[test: 6, observed: [result: 'found', model: 'UMOCK', keys: 'a']]]) == [airplay: [model: 'UMOCK'], otherMessages: '']
 check 'no airplay when not found', h.profileFields([[test: 6, observed: [result: 'none', model: null, keys: null]]]) == [:]
+
+println 'SmartThings: status line'
+String ST1 = '[method:statusParse, volume:24, mute:unmuted, inputSource:HDMI1, tvChannel: , tvChannelName:sNUyBbfvHf.SpectrumTV, pictureMode:AI Optimized, soundMode:Adaptive Sound+]'
+Map sf = h.stStatusFields(ST1)
+check 'every field', sf == [volume: '24', mute: 'unmuted', inputSource: 'HDMI1', tvChannel: ' ', tvChannelName: 'sNUyBbfvHf.SpectrumTV',
+                            pictureMode: 'AI Optimized', soundMode: 'Adaptive Sound+']
+check 'TV off: nothing', h.stStatusFields('[method:statusParse]') == [:]
+check 'null value', h.stStatusFields('[method:statusParse, volume:5, mute:muted, inputSource:null, tvChannel:12, tvChannelName:News, One, pictureMode:Movie, soundMode:Standard]') ==
+    [volume: '5', mute: 'muted', inputSource: null, tvChannel: '12', tvChannelName: 'News, One', pictureMode: 'Movie', soundMode: 'Standard']
+def stLine = { String ts, int vol, String pic = 'Movie' -> line(ts, "[method:statusParse, volume:${vol}, mute:unmuted, inputSource:HDMI1, tvChannel:12, tvChannelName:News, pictureMode:${pic}, soundMode:Standard]".toString(), 'debug') }
+def at = { String ts -> h.tsMs("2026-10-15 ${ts}".toString(), utc) }
+
+println 'SmartThings: plan'
+Map stState = [pictureModes: ['Dynamic', 'Standard', 'Movie'], soundModes: '["Standard","Game"]']
+check 'volume down one', h.stPlan(12, [volume: 24], stState) == [cmd: 'setVolume', attr: 'volume', from: '24', to: '23']
+check 'volume 0 goes up', h.stPlan(12, [volume: '0'], stState).to == '1'
+check 'no volume: skipped', h.stPlan(12, [volume: null], stState).skip != null
+check 'next picture mode, wrapping', h.stPlan(13, [pictureMode: 'Movie'], stState) == [cmd: 'setPictureMode', attr: 'pictureMode', from: 'Movie', to: 'Dynamic']
+check 'sound modes from JSON text', h.stPlan(14, [soundMode: 'Standard'], stState) == [cmd: 'setSoundMode', attr: 'soundMode', from: 'Standard', to: 'Game']
+check 'one mode: skipped', h.stPlan(13, [pictureMode: 'Movie'], [pictureModes: ['Movie']]).skip.contains('picture')
+check 'current mode not listed: skipped', h.stPlan(14, [soundMode: 'Odd'], stState).skip.contains('sound')
+check 'input set to itself', h.stPlan(15, [inputSource: 'HDMI1'], stState) == [cmd: 'setInputSource', attr: 'inputSource', from: 'HDMI1', to: 'HDMI1']
+check 'no input: skipped', h.stPlan(15, [inputSource: null], stState).skip != null
+
+println 'SmartThings: status test'
+Map ss = h.evalStStatus([line('1:00:02.000', 'asyncGet: [parse: distResp, reason: statusParse]', 'debug'), line('1:00:03.000', ST1, 'debug')],
+                        [status: [ok: true, ms: 3000L]], [inputSourceCap: 'samsungvd.mediaInputSource', pictureModeCap: 'samsungvd.pictureMode',
+                         soundModeCap: 'samsungvd.soundMode', pictureModes: ['AI Customization', 'AI Optimized'], soundModes: ['Standard', 'Game']], ' ', utc)
+check 'answered and on', ss.answered == true && ss.reportsOn == true && ss.statusMs == 3000L && ss.problem == null
+check 'capabilities and modes', ss.inputCap == 'samsungvd.mediaInputSource' && ss.pictureModes == 'AI Customization|AI Optimized' && ss.soundModes == 'Standard|Game'
+check 'app showing, not named', ss.appCode == 'sNUyBbfvHf.SpectrumTV' && ss.appNamed == false && h.differences(ss, [appNamed: [eq: true, optional: true]]) == ['appNamed']
+Map ssCh = h.evalStStatus([stLine('1:00:03.000', 24)], [status: [ok: true, ms: 10L]], [:], ' ', utc)
+check 'a channel: no app fields', !ssCh.containsKey('appNamed') && h.differences(ssCh, [appNamed: [eq: true, optional: true]]) == []
+Map ssOff = h.evalStStatus([line('1:00:03.000', '[method:statusParse]', 'debug')], [status: [ok: true, ms: 10L]], [:], ' ', utc)
+check 'SmartThings says off', ssOff.answered == true && ssOff.reportsOn == false
+Map ss401 = h.evalStStatus([line('1:00:03.000', 'SmartThings rejected the API key (HTTP 401). Tokens created after 30 Dec 2024 expire after 24 hours.', 'error')],
+                           [status: [ok: true, ms: 10L]], [:], ' ', utc)
+check 'rejected key', ss401.answered == false && ss401.statusMs == null && ss401.problem.startsWith('SmartThings rejected')
+
+check 'key rejected before the run', h.evalStStatus([], [status: [ok: false]], [stAuthFailed: true], ' ', utc).problem.contains('rejected')
+
+println 'SmartThings: set tests'
+Map volPlan = [cmd: 'setVolume', attr: 'volume', from: '24', to: '23']
+Map stSteps = [set: [ok: true, ms: 2500L, at: at('1:00:00.000')], check: [ok: true, ms: 1500L, at: at('1:00:10.000')], restore: [ok: true, ms: 2000L, at: at('1:00:20.000')]]
+Map expSet = [commandStatus: [eq: 200], valueSet: [eq: true], statusLags: [eq: false], event: [eq: true, driver: true, optional: true], restored: [eq: true]]
+Map vs = h.evalStSet([stLine('1:00:02.500', 23), stLine('1:00:11.500', 23), stLine('1:00:22.000', 24)], [[name: 'volume', value: '23', at: 1L]], stSteps, volPlan, utc)
+check 'set, read back, restored', vs.commandStatus == 200 && vs.setMs == 2500L && vs.firstStatus == '23' && vs.laterStatus == '23' && vs.valueSet &&
+    !vs.statusLags && vs.event == true && vs.restored == true && h.differences(vs, expSet) == []
+Map vl = h.evalStSet([stLine('1:00:02.500', 24), stLine('1:00:11.500', 23), stLine('1:00:22.000', 24)], [[name: 'volume', value: '23', at: 1L]], stSteps, volPlan, utc)
+check 'first status late', vl.valueSet && vl.statusLags && h.differences(vl, expSet) == ['statusLags']
+Map vn = h.evalStSet([stLine('1:00:02.500', 24), stLine('1:00:11.500', 24), stLine('1:00:22.000', 24)], [[name: 'volume', value: '24', at: 1L]], stSteps, volPlan, utc)
+check 'never set: no event judged', vn.valueSet == false && !vn.containsKey('event') && h.differences(vn, expSet) == ['valueSet'] && h.splitDiffs(['valueSet'], expSet).driverDiffs == []
+Map ve = h.evalStSet([stLine('1:00:02.500', 23), stLine('1:00:11.500', 23), stLine('1:00:22.000', 24)], [[name: 'volume', value: '24', at: 1L]], stSteps, volPlan, utc)
+check 'no event: the driver differs', ve.event == false && h.splitDiffs(h.differences(ve, expSet), expSet).driverDiffs == ['event']
+Map vf = h.evalStSet([line('1:00:01.000', 'deviceCommand: [status: FAILED, httpCode: 422, capability: audioVolume]', 'warn')], [], stSteps, volPlan, utc)
+check 'command refused', vf.commandStatus == 422 && vf.setMs == null && vf.valueSet == false && vf.restored == false
+check 'key rejected', h.evalStSet([line('1:00:01.000', 'SmartThings rejected the API key (HTTP 401).', 'error')], [], stSteps, volPlan, utc).commandStatus == 401
+check 'no line at all', h.evalStSet([], [], [set: [ok: false, at: at('1:00:00.000')]], volPlan, utc).commandStatus == 'no answer'
+check 'a failed restore does not change the command status',
+    h.evalStSet([stLine('1:00:02.500', 23), stLine('1:00:11.500', 23), line('1:00:21.000', 'deviceCommand: [status: FAILED, httpCode: 409, capability: audioVolume]', 'warn')],
+                [[name: 'volume', value: '23', at: 1L]], stSteps, volPlan, utc).with { it.commandStatus == 200 && it.restored == false }
+Map inPlan = [cmd: 'setInputSource', attr: 'inputSource', from: 'HDMI1', to: 'HDMI1']
+Map vi = h.evalStSet([stLine('1:00:02.500', 24)], [], [set: [ok: true, ms: 2500L, at: at('1:00:00.000')]], inPlan, utc)
+check 'input set to itself', vi == [value: 'HDMI1', commandStatus: 200, unchanged: true] && h.differences(vi, [commandStatus: [eq: 200], unchanged: [eq: true]]) == []
+check 'picture mode', h.evalStSet([stLine('1:00:02.500', 24, 'Dynamic'), stLine('1:00:11.500', 24, 'Dynamic'), stLine('1:00:22.000', 24, 'Movie')],
+    [[name: 'pictureMode', value: 'Dynamic', at: 1L]], stSteps, [cmd: 'setPictureMode', attr: 'pictureMode', from: 'Movie', to: 'Dynamic'], utc).with { it.valueSet && it.event && it.restored }
+check 'problem line masked', h.stProblem([line('1:00:01.000', 'distResp: [status:ERROR, httpCode:500, errorMsg:host 192.168.1.9]', 'warn')]) == 'distResp: [status:ERROR, httpCode:500, errorMsg:host <ip>]'
+check 'trace keeps SmartThings debug lines, drops other debug',
+    h.traceLines([stLine('1:00:02.500', 23), line('1:00:03.000', 'push: button = 1', 'debug'), line('1:00:04.000', 'deviceCommand: [component:main]', 'debug')]).size() == 2
 
 println 'deviceInfoFields'
 Map fi = h.deviceInfoFields([device: [OS: 'Tizen', duid: 'uuid:x', wifiMac: 'f4:7b:09:12:34:56', PowerState: 'on'], version: '2.0.25',
