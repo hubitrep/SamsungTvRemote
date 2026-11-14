@@ -38,6 +38,7 @@ List<String> SIGNATURES = [
     'String redact(String s, boolean names = true) {',
     'String stKeyTag(String key) {',
     'boolean keyReplaced(String sentTag, String currentTag) {',
+    'String appNameForCode(Map appData, String code) {',
 ]
 def h = new GroovyShell().parse(SIGNATURES.collect { extract(text, it) }.join("\n") + "\nreturn this\n").run()
 
@@ -112,6 +113,12 @@ check 'reply for the current key counts', !h.keyReplaced(h.stKeyTag("abc"), h.st
 check 'reply for a replaced key ignored', h.keyReplaced(h.stKeyTag("abc"), h.stKeyTag("abd"))
 check 'reply without a tag counts', !h.keyReplaced(null, h.stKeyTag("abc"))
 check 'key removed since', h.keyReplaced(h.stKeyTag("abc"), h.stKeyTag(null))
+
+println 'appNameForCode'
+Map apps = [Netflix: '3201907018807', 'Spectrum TV': 'sNUyBbfvHf.SpectrumTV']
+check 'code in the list', h.appNameForCode(apps, 'sNUyBbfvHf.SpectrumTV') == 'Spectrum TV'
+check 'code not in the list', h.appNameForCode(apps, 'abc.Other') == null
+check 'no list, blank code', h.appNameForCode(null, 'abc.Other') == null && h.appNameForCode(apps, ' ') == null && h.appNameForCode(apps, null) == null
 
 println "\n${pass} passed, ${fail} failed"
 System.exit(fail ? 1 : 0)

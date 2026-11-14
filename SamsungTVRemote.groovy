@@ -1536,6 +1536,12 @@ def appIdList() {
 	return appList.unique()
 }
 
+//	the app list's name for an app code; null when the code is not in it
+String appNameForCode(Map appData, String code) {
+	if (!code?.trim()) { return null }
+	return appData?.find { it.value == code }?.key
+}
+
 def updateAppName(tvName = device.currentValue("tvChannelName")) {
 	//	If the tvChannel is blank, the name may reflect the appId
 	//	that is used by the device.  Thanks SmartThings.
@@ -1550,6 +1556,8 @@ def updateAppName(tvName = device.currentValue("tvChannelName")) {
 	if (tempName != null) { 
 		appName = tempName.value
 		logData << [tempName: tempName]
+	} else if (appNameForCode(state.appData, tvName)) {
+		appName = appNameForCode(state.appData, tvName)
 	}
 	//	See if the name is in the app list.  If so, update here
 	//	and in states.
@@ -1985,8 +1993,16 @@ def statusParse(mainData) {
 		parseResults << [tvChannel: tvChannel, tvChannelName: tvChannelName]
 		if (tvChannel == " ") {
 			//	a blank tvChannel means an app; tvChannelName is then the app code (SmartThings).
-			//	Look each code up once, also when the attribute already held it before an upgrade.
-			if (tvChannelName?.contains(".") && tvChannelName != state.appLookedUp) {
+			//	A code already in the app list is named from it on every status, so a name blanked
+			//	by a close or a power-off comes back. Any other code is looked up on the TV once.
+			String knownApp = appNameForCode(state.appData, tvChannelName)
+			if (knownApp) {
+				if (device.currentValue("appName") != knownApp) {
+					sendEvent(name: "appName", value: knownApp)
+					sendEvent(name: "appId", value: tvChannelName)
+					runIn(1, updateTitle)
+				}
+			} else if (tvChannelName?.contains(".") && tvChannelName != state.appLookedUp) {
 				state.appLookedUp = tvChannelName
 				runIn(2, updateAppName)
 			}
