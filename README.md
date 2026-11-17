@@ -170,7 +170,8 @@ it to an installed package with **Modify**.
 ### 2.4.11 (driver 2.4.11, Tester 0.5.0, new SmartThings Link 0.1.0)
 
 - New optional app **Samsung TV SmartThings Link** (beta): signs in to your SmartThings account and
-  keeps each TV's SmartThings key renewed. See [SmartThings](#smartthings).
+  keeps each TV's SmartThings key renewed. Requires a paid SmartThings Developer Plan subscription.
+  See [SmartThings](#smartthings).
 - Driver: new command **setSmartThingsKey**, used by the Link app.
 - Driver: **appName** shows the app's name whenever SmartThings reports an app the device has a code for.
 - Tester: tests for the SmartThings functions (status, volume, volume keys, mute, picture and sound
