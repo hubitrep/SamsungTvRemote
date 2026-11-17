@@ -1,0 +1,26 @@
+{
+  "_source": "2026 S95H OLED (QN83S95HAEXZA, wireless): tester report 0.4.0 with driver 2.4.11, firmware 2.5.3.123, SmartThings on, Power On with Mobile and IP Remote on, sent by the owner 2026-11-17. restStoppedS and restStandbyS from the first report's test 8 readings (no REST answer from the first reading at 5 s through 52 s, PowerState standby from 57 s); the first reading was already silent, so REST may stop sooner. restAfterOffS 72 is the last reading, not a measured end. REST still answered PowerState standby when test 10 started, so it stays up in standby; bootS from test 10's restOnMs (20.8 s, 3 Wake-on-LAN sends; firstAnswerMs 10.2 s was a standby answer). Not modelled: REST before 5 s after off; whether KEY_POWER over the standby socket wakes it (the mock ignores keys in standby). Second report (tester 0.5.0, same day): REST answered PowerState standby at every reading from 5 s to 72 s with no gap, so the gap is not every time; connectMs 157, launchMs 320.",
+  "deviceInfo": {
+    "Language": "en_US",
+    "VoiceSupport": "true",
+    "WallScreenRatio": "-1",
+    "model": "26_RSM_QD_ATA",
+    "modelName": "QN83S95HAEXZA"
+  },
+  "isSupport": {
+    "remote_voiceControl": "true"
+  },
+  "connectMs": 81,
+  "launchMs": 213,
+  "answered": false,
+  "apps": null,
+  "wentAway": "REST stopped, PowerState standby",
+  "restAfterOffS": 72,
+  "restStoppedS": 5,
+  "restStandbyS": 57,
+  "probeReply": "ms.channel.connect",
+  "bootS": 21,
+  "airplay": {
+    "model": "S95H"
+  }
+}

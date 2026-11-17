@@ -92,12 +92,23 @@ def waking():
         return False
     return tv["booting"] or time.monotonic() - tv["wakeAt"] < P["standbyAnswerS"]
 
+def rest_gap():
+    # restStoppedS to restStandbyS after off: REST stops answering, then answers again with PowerState standby (S95H report)
+    # timed from the power key, as the tester's readings are timed from off()
+    if tv["shutdownAt"] is None or P.get("restStoppedS") is None or P.get("restStandbyS") is None:
+        return False
+    return P["restStoppedS"] <= time.monotonic() - tv.get("offKeyAt", tv["shutdownAt"]) < P["restStandbyS"]
+
+def rest_back():
+    # after restStandbyS REST keeps answering PowerState standby until the TV is woken (S95H report)
+    return tv["shutdownAt"] is not None and P.get("restStandbyS") is not None and not rest_gap()
+
 # test 8 wentAway: "REST stopped" means it stops answering; otherwise it answers in standby
 def rest_in_standby():
     return "REST stopped" not in (P.get("wentAway") or "REST stopped")
 
 async def rest_info(request):
-    if tv["power"] != "on" and not (rest_in_standby() or shutting_down() or waking()):
+    if tv["power"] != "on" and not waking() and (rest_gap() or not (rest_in_standby() or shutting_down() or rest_back())):
         log("rest: GET /api/v2/ (asleep, no answer)")
         await asleep()
     info = device_info(request)
@@ -166,8 +177,9 @@ async def channel(request):
     if secure and not token_auth():
         raise web.HTTPNotFound()
     if tv["power"] != "on":
-        # in standby a TV that still answers REST accepts the socket, then times out; one that doesn't hangs
-        if not (rest_in_standby() and P.get("probeReply") == "ms.channel.timeOut"):
+        # in standby a TV that still answers REST accepts the socket, then times out; one that doesn't hangs;
+        # probeReply ms.channel.connect: the socket connects in standby and keys do nothing (S95H report)
+        if not (rest_in_standby() and P.get("probeReply") == "ms.channel.timeOut") and P.get("probeReply") != "ms.channel.connect":
             await asleep()
     ws = web.WebSocketResponse(autoping=True)
     await ws.prepare(request)
@@ -195,7 +207,7 @@ def extra_events(art):
     return [n[4:] for n in names if n.startswith("art:")] if art else [n for n in names if not n.startswith("art:")]
 
 async def handshake(ws, name, secure, params):
-    if tv["power"] != "on":
+    if tv["power"] != "on" and P.get("probeReply") != "ms.channel.connect":
         await asyncio.sleep(1)
         await send(ws, name, {"event": "ms.channel.timeOut"})
         return False
@@ -261,10 +273,14 @@ async def key(cmd, code):
     if code:
         tv["lastKey"], tv["keyAtS"] = code, round(time.time(), 1)
         tv["keys"] = (tv["keys"] + [code])[-40:]
+    if tv["power"] != "on":
+        log(f"key {code} ignored in standby")
+        return
     if code != "KEY_POWER":
         return
     if not frame():
         if cmd in ("Click", "Press"):
+            tv["offKeyAt"] = time.monotonic()
             await asyncio.sleep(1)
             await go_standby("KEY_POWER")
         return

@@ -124,7 +124,8 @@ back the same report, timings aside.
 | `otherMessages` | events the TV sends that the driver doesn't handle; the mock sends them after a connect (`art:<name>` on the art channel) |
 | `wentAway` | test 8: `REST stopped`, or anything else for a TV that keeps answering REST in standby |
 | `restAfterOffS` | test 8: seconds REST keeps answering after the power-off |
-| `probeReply` | test 9: what a socket gets in standby when REST still answers (`ms.channel.timeOut`, or no answer) |
+| `restStoppedS`, `restStandbyS` | test 8: REST stops answering this many seconds after the power-off, then answers again with `PowerState` standby (both absent: no such gap) |
+| `probeReply` | test 9: what a socket gets in standby: `ms.channel.timeOut` when REST still answers, `ms.channel.connect` when it connects and ignores keys, or no answer |
 | `artReady`, `statusReply`, `setReply`, `powerStateInArt` | test 7: art channel sends `ms.channel.ready`; art state at start; `set_artmode_status` reply before or after the broadcast (`not seen`: after); `PowerState` while showing art |
 | `launchMs`, `closeBody` | test 4: time to answer an app launch; body of the close reply |
 | `answered`, `apps` | test 5: whether `ed.installedApp.get` is answered, and with how many apps |
@@ -141,6 +142,7 @@ back the same report, timings aside.
 | `frame2025.json` | 2025 Frame: `PowerState` standby while showing art | ha-samsungtv-smart release notes; platform string made up |
 | `qn88b2022.json` | 2022 QN88B: reports `PowerState` standby while REST still answers after off | tester report |
 | `qn95b2022.json` | 2022 QN95B: 6.6 s handshake, REST answers `PowerState` standby for 6 s after off then stops, Wake-on-LAN ignored within 6 s of standby, slow to report on (`standbyAnswerS` and `bootS` are guesses) | tester report and owner posts |
+| `s95h2026.json` | 2026 S95H OLED: 81 ms handshake, REST silent from 5 s to 57 s after off then reports standby, socket connects in standby, no app list | tester report |
 | `nopowerstate.json` | no `PowerState`, REST answers in standby | constructed |
 | `notoken.json` | no token auth, plain `ws` on 8001 | constructed |
 | `refused.json` | the allow dialog refused | constructed |
