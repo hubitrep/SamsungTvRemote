@@ -90,15 +90,19 @@ These steps follow SmartThings' own
 
 ### Step 3: Add the app to Hubitat
 
+With HPM: open **Hubitat Package Manager**, choose **Modify**, select **Samsung TV Remote (hubitrep)** and
+add **Samsung TV SmartThings Link**. Without HPM:
+
 1. In Hubitat, open **Apps code** (in the menu on the left, under **For developers**).
 2. Click **+ Add app**.
 3. Click the **⋮** button at the top right, then **Import**.
 4. Paste this address and click **Import**:
 
-   `https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/smartthings-link/SamsungTVSmartThingsLink.groovy`
+   `https://raw.githubusercontent.com/hubitrep/SamsungTvRemote/main/SamsungTVSmartThingsLink.groovy`
 
 5. Click **Save**.
-6. Open **Apps** in the menu, click **+ Add user app**, then **Samsung TV SmartThings Link**.
+
+Then open **Apps** in the menu, click **+ Add user app**, then **Samsung TV SmartThings Link**.
 
 The app's page opens:
 
@@ -162,6 +166,15 @@ runs and asks you what only you can see, such as when the picture came on. See [
 it to an installed package with **Modify**.
 
 ## Changes
+
+### 2.4.11 (driver 2.4.11, Tester 0.5.0, new SmartThings Link 0.1.0)
+
+- New optional app **Samsung TV SmartThings Link** (beta): signs in to your SmartThings account and
+  keeps each TV's SmartThings key renewed. See [SmartThings](#smartthings).
+- Driver: new command **setSmartThingsKey**, used by the Link app.
+- Driver: **appName** shows the app's name whenever SmartThings reports an app the device has a code for.
+- Tester: tests for the SmartThings functions (status, volume, volume keys, mute, picture and sound
+  mode, input, channel), run when the device uses SmartThings.
 
 ### 2.4.10 (Tester 0.4.0; driver unchanged)
 

@@ -1,12 +1,12 @@
 {
   "packageName": "Samsung TV Remote (hubitrep)",
   "author": "hubitrep (original by Dave Gutheinz)",
-  "version": "2.4.10",
+  "version": "2.4.11",
   "minimumHEVersion": "2.3.9",
   "documentationLink": "https://github.com/hubitrep/SamsungTvRemote/blob/main/README.md",
   "communityLink": "https://community.hubitat.com/t/release-samsung-tv-remote-2016-and-later-tvs/166829",
-  "dateReleased": "2026-11-09",
-  "releaseNotes": "2.4.10: Tester 0.4.0 has its own page: each test runs with a countdown, asks you what only you can see (with \"I'm at the TV\" off it asks nothing), and has a remote with every driver command and a log of what the TV answered. Tests are numbered in run order. The driver is unchanged (2.4.9).",
+  "dateReleased": "2026-11-17",
+  "releaseNotes": "2.4.11: New optional app Samsung TV SmartThings Link 0.1.0 (beta): signs in to your SmartThings account and keeps each TV's SmartThings key renewed. Driver 2.4.11: new command setSmartThingsKey, used by the Link app; appName shows the app's name whenever SmartThings reports an app the device has a code for. Tester 0.5.0: tests for the SmartThings functions (status, volume, volume keys, mute, picture and sound mode, input, channel), run when the device uses SmartThings.",
   "drivers": [
     {
       "id": "70c694f2-d2cb-4c00-9357-28376f9c794f",
