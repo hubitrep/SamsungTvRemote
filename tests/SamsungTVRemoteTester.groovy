@@ -493,6 +493,9 @@ String skipReason(int test, Map run) {
             if (ctx.stDown) return "SmartThings did not answer the device's requests"
             if (ctx.stOff) return "SmartThings reports the TV off"
             if (test == 11) return null
+            // An input left changed makes the channel test's starting point wrong.
+            if (test == 18 && ((run.results as List).find { it.test == 17 }?.observed as Map)?.restored == false)
+                return "the input test did not get the input back"
             Map plan = stPlan(test, [volume: tv.currentValue("volume"), mute: tv.currentValue("mute"), pictureMode: tv.currentValue("pictureMode"),
                                      soundMode: tv.currentValue("soundMode"), inputSource: tv.currentValue("inputSource"),
                                      tvChannel: tv.currentValue("tvChannel")], deviceState())
@@ -836,6 +839,40 @@ private Map appLookup(String code) {
     return out
 }
 
+// The TV's picture and sound mode capabilities as SmartThings lists them, with each mode's id and name, read
+// with the device's own key: a samsungvd.* TV may want the id where the driver sends the name.
+private Map stModeLookup() {
+    Map out = [stModeStatus: "no answer"]
+    try {
+        httpGet([uri: "https://api.smartthings.com", path: "/v1/devices/${tv.getSetting('stDeviceId')}/components/main/status",
+                 headers: [Authorization: "Bearer ${tv.getSetting('stApiKey')}"], timeout: 15]) { resp ->
+            out.stModeStatus = resp.status
+            if (resp.data instanceof Map) out.putAll(stModeMaps(resp.data as Map))
+        }
+    } catch (groovyx.net.http.HttpResponseException e) {
+        out.stModeStatus = e.statusCode
+    } catch (e) {
+        logDebug "SmartThings mode lookup failed: ${maskLine(e.message)}"
+    }
+    return out
+}
+
+// From a component's status: the mode capabilities present and their supported*Map values as id=name lists.
+Map stModeMaps(Map comp) {
+    List<String> caps = comp.keySet().findAll { it.toLowerCase() =~ /(picture|sound)mode/ }.collect { it as String }.sort()
+    Map out = [stModeCaps: caps.join(",")]
+    caps.each { String cap ->
+        Map attrs = (comp[cap] ?: [:]) as Map
+        attrs.each { k, v ->
+            def val = (v instanceof Map) ? (v as Map).value : null
+            if ((k as String).endsWith("Map") && val instanceof List) {
+                out["${cap}.${k}".toString()] = (val as List).collect { m -> m instanceof Map ? "${(m as Map).id}=${(m as Map).name}" : m as String }.join("|")
+            }
+        }
+    }
+    return out
+}
+
 private Map fetchDeviceInfo(int timeoutS = 6) {
     Map out = [status: null]
     try {
@@ -879,6 +916,7 @@ Map evaluateTest(int test, List<Map> lines, Map steps, Map run, List<Map> events
         case 11:
             f = evalStStatus(lines, steps, deviceState(), tv.currentValue("appName") as String, tz)
             if (f.appCode) f.putAll(appLookup(f.appCode as String))
+            if (f.answered) f.putAll(stModeLookup())
             break
         case 12: case 13: case 14: case 15: case 16: case 17: case 18: f = evalStSet(lines, events, steps, (run.ctx.stPlan ?: [:]) as Map, tz); break
         default: f = [:]
@@ -963,7 +1001,12 @@ List<Map> stepsFor(int test, Map run) {
                              wait: ST_WAIT, timeout: 30, after: 5]]
             if (p.restore) {
                 st << [name: "check", label: "Reading the ${what} again".toString(), cmd: "refresh", wait: ST_WAIT, timeout: 30, after: 2]
-                st << [name: "restore", label: "Putting the ${what} back".toString(), cmd: back.cmd, args: back.args ?: [], st: true, wait: ST_WAIT, timeout: 30, after: 2]
+                st << [name: "restore", label: "Putting the ${what} back".toString(), cmd: back.cmd, args: back.args ?: [], st: true, wait: ST_WAIT, timeout: 30, after: test == 17 ? 10 : 2]
+                // SmartThings reports an input change about 15 s late: read again so the next test starts from the input the TV shows.
+                if (test == 17) {
+                    st << [name: "confirm", label: "Reading the input again".toString(), cmd: "refresh", wait: ST_WAIT, timeout: 30, after: 10]
+                    st << [name: "confirm2", label: "Reading the input again".toString(), cmd: "refresh", wait: ST_WAIT, timeout: 30, after: 2]
+                }
             }
             return st
         default:
@@ -1663,6 +1706,14 @@ Map evalStStatus(List<Map> lines, Map steps, Map st, String appName, TimeZone tz
     return f
 }
 
+// A status value; a blank channel with a dotted name is an app's code (channel up can open Samsung TV Plus), so
+// the channel reads as that code. A blank channel alone is no change.
+String stValue(Map vals, String attr) {
+    String v = vals[attr] as String
+    if (attr == "tvChannel" && !v?.trim() && (vals.tvChannelName as String)?.contains(".")) return vals.tvChannelName as String
+    return v
+}
+
 // One value changed and put back: what SmartThings answered, what its status showed right after the
 // command and after a second read, the driver's event, and the value put back. A plan without a target
 // (to: null) is met by any other value.
@@ -1674,7 +1725,7 @@ Map evalStSet(List<Map> lines, List<Map> events, Map steps, Map plan, TimeZone t
     def seen = { Long from, Long to ->
         if (from == null) return null
         Map hit = all.find { (it.atMs as long) >= from && (to == null || (it.atMs as long) < to) }
-        return hit ? (hit.vals as Map)[attr] as String : null
+        return hit ? stValue(hit.vals as Map, attr) : null
     }
     String first = seen(setAt, setEnd)
     String later = seen(checkAt, restoreAt)
@@ -1693,7 +1744,9 @@ Map evalStSet(List<Map> lines, List<Map> events, Map steps, Map plan, TimeZone t
     Map f = [from: plan.from, to: to, commandStatus: status, setMs: status == 200 ? steps.set?.ms : null,
              firstStatus: first, laterStatus: later, valueSet: set, statusLags: !hit(first) && hit(later)]
     if (set) f.event = events.any { it.name == attr && (it.value as String) == to }
-    f.restored = seen(restoreAt, null) == plan.from
+    // The last status after the restore: SmartThings can report the old value first (input changes)
+    Map back = restoreAt == null ? null : all.findAll { (it.atMs as long) >= restoreAt }.with { it ? it[-1] : null }
+    f.restored = back != null && stValue(back.vals as Map, attr) == plan.from
     return f
 }
 
@@ -2016,7 +2069,7 @@ String formatReport(Map header, List<Map> results) {
 
 // The report's fields a mock TV profile uses, taken from the tests that ran; otherMessages merged across tests.
 Map profileFields(List<Map> results) {
-    Map keys = [1: ["deviceInfo", "isSupport", "apiVersion"], 2: ["handshake", "connectMs"], 8: ["wentAway", "restAfterOffS"],
+    Map keys = [1: ["deviceInfo", "isSupport", "apiVersion"], 2: ["handshake", "connectMs"], 8: ["wentAway", "restAfterOffS", "restStoppedS", "restStandbyS"],
                 9: ["probeReply"], 7: ["artReady", "statusReply", "setReply", "powerStateInArt"],
                 4: ["launchMs", "closeBody"], 5: ["answered", "apps"]]
     Map prof = [:]

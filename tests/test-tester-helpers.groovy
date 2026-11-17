@@ -70,6 +70,8 @@ List<String> SIGNATURES = [
     'Map stPlan(int test, Map cur, Map st) {',
     'Map evalStStatus(List<Map> lines, Map steps, Map st, String appName, TimeZone tz) {',
     'Map evalStSet(List<Map> lines, List<Map> events, Map steps, Map plan, TimeZone tz) {',
+    'String stValue(Map vals, String attr) {',
+    'Map stModeMaps(Map comp) {',
     'Map evalAppsSt(List<Map> lines, List<Map> events, Map steps, TimeZone tz) {',
     'boolean runStalled(Map run, long nowMs) {',
     'Map splitDiffs(List diffs, Map expect) {',
@@ -427,6 +429,18 @@ Map ve = h.evalStSet([stLine('1:00:02.500', 23), stLine('1:00:11.500', 23), stLi
 check 'no event: the driver differs', ve.event == false && h.splitDiffs(h.differences(ve, expSet), expSet).driverDiffs == ['event']
 Map vf = h.evalStSet([line('1:00:01.000', 'deviceCommand: [status: FAILED, httpCode: 422, capability: audioVolume]', 'warn')], [], stSteps, volPlan, utc)
 check 'command refused', vf.commandStatus == 422 && vf.setMs == null && vf.valueSet == false && vf.restored == false
+Map latePlan = [attr: 'inputSource', from: 'HDMI1', to: null]
+def lateLine = { String ts, String input -> line(ts, "[method:statusParse, volume:15, mute:unmuted, inputSource:${input}, tvChannel:2802, tvChannelName:News, pictureMode:Standard, soundMode:Standard]".toString(), 'debug') }
+Map vLate = h.evalStSet([lateLine('1:00:02.500', 'dtv'), lateLine('1:00:11.500', 'dtv'), lateLine('1:00:22.000', 'dtv'), lateLine('1:00:37.000', 'HDMI1')], [[name: 'inputSource', value: 'dtv', at: 1L]], stSteps, latePlan, utc)
+check 'input reported back late: restored', vLate.valueSet && vLate.restored == true
+check 'input never back: not restored', h.evalStSet([lateLine('1:00:02.500', 'dtv'), lateLine('1:00:22.000', 'dtv')], [], stSteps, latePlan, utc).restored == false
+def chLine = { String ts, String ch, String name -> line(ts, "[method:statusParse, volume:20, mute:unmuted, inputSource:dtv, tvChannel:${ch}, tvChannelName:${name}, pictureMode:Standard, soundMode:Standard]".toString(), 'debug') }
+Map vCh = h.evalStSet([chLine('1:00:02.500', ' ', 'HEPsqFNie0.tvplusstandalone'), chLine('1:00:11.500', ' ', 'HEPsqFNie0.tvplusstandalone'), chLine('1:00:22.000', '1122', 'WHIO Dayton')],
+                      [], stSteps, [attr: 'tvChannel', from: '1122', to: null], utc)
+check 'channel up opens an app: counts as changed, restored', vCh.valueSet && vCh.to == 'HEPsqFNie0.tvplusstandalone' && vCh.restored == true
+Map mm = h.stModeMaps(['samsungvd.pictureMode': [pictureMode: [value: 'Standard'], supportedPictureModesMap: [value: [[id: 'modeStandard', name: 'Standard'], [id: 'modeMovie', name: 'Movie']]]],
+                       'audioVolume': [volume: [value: 20]]])
+check 'mode maps: caps and id=name lists', mm.stModeCaps == 'samsungvd.pictureMode' && mm['samsungvd.pictureMode.supportedPictureModesMap'] == 'modeStandard=Standard|modeMovie=Movie'
 check 'key rejected', h.evalStSet([line('1:00:01.000', 'SmartThings rejected the API key (HTTP 401).', 'error')], [], stSteps, volPlan, utc).commandStatus == 401
 check 'no line at all', h.evalStSet([], [], [set: [ok: false, at: at('1:00:00.000')]], volPlan, utc).commandStatus == 'no answer'
 check 'a failed restore does not change the command status',
